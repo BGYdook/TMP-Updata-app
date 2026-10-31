@@ -1,0 +1,47 @@
+{
+  "appId": "cn.tmpsync.updater",
+  "productName": "TMP更新工具",
+  "asar": true,
+  "npmRebuild": false,
+  "electronFuses": {
+    "runAsNode": false,
+    "enableCookieEncryption": true,
+    "enableNodeOptionsEnvironmentVariable": false,
+    "enableNodeCliInspectArguments": false,
+    "enableEmbeddedAsarIntegrityValidation": true,
+    "onlyLoadAppFromAsar": true,
+    "loadBrowserProcessSpecificV8Snapshot": false,
+    "grantFileProtocolExtraPrivileges": false
+  },
+  "directories": {
+    "output": "release"
+  },
+  "files": [
+    "dist/**/*",
+    "electron/bootstrap.cjs",
+    "electron/main.release.cjs",
+    "electron/preload.release.cjs",
+    "electron/tmp-update.release.cjs",
+    "package.json",
+    "!node_modules/**/*",
+    "!**/*.map",
+    "!**/*.md"
+  ],
+  "win": {
+    "icon": "public/app-icon.ico",
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      }
+    ],
+    "artifactName": "TMP-Update-${version}-Setup.${ext}"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "TMP 更新工具"
+  }
+}

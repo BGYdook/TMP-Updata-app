@@ -1,0 +1,42 @@
+{
+  "name": "tmp-sync",
+  "private": true,
+  "version": "1.2.0",
+  "type": "module",
+  "main": "electron/bootstrap.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "build:icons": "node scripts/build-icons.mjs",
+    "preview": "vite preview",
+    "typecheck": "tsc -b --pretty false",
+    "desktop:dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && electron .\"",
+    "desktop:build": "npm run build && node scripts/build-desktop.mjs",
+    "smoke:download": "node scripts/smoke-download.mjs",
+    "smoke:ui": "node scripts/smoke-ui.mjs",
+    "smoke:native": "node scripts/smoke-native.mjs",
+    "smoke:desktop": "node scripts/smoke-desktop.mjs",
+    "smoke:theme": "node scripts/smoke-theme.mjs",
+    "smoke:dashboard": "node scripts/smoke-dashboard.mjs"
+  },
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "spark-md5": "^3.0.2"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@types/spark-md5": "^3.0.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "electron": "41.3.0",
+    "electron-builder": "^26.18.0",
+    "javascript-obfuscator": "^5.9.0",
+    "playwright-core": "^1.64.1",
+    "typescript": "~5.7.2",
+    "vite": "^6.0.5",
+    "wait-on": "^8.0.1"
+  }
+}

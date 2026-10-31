@@ -1,0 +1,492 @@
+const {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  nativeTheme,
+  net,
+  protocol,
+  session,
+  shell,
+  Tray,
+  Menu,
+  Notification,
+  nativeImage,
+} = require("electron");
+const path = require("node:path");
+const fsp = require("node:fs/promises");
+const { TmpUpdateManager } = require(
+  app.isPackaged ? "./tmp-update.release.cjs" : "./tmp-update.cjs",
+);
+
+const DEV_URL = process.env.VITE_DEV_SERVER_URL || "http://127.0.0.1:5173";
+const TMP_API_BASE = "https://tmplistoss.bgydook.cn";
+const APP_ORIGIN = "tmp-app://bundle";
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: "tmp-app",
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+      stream: true,
+    },
+  },
+]);
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) app.quit();
+
+let mainWindow = null;
+let tray = null;
+let quitting = false;
+let backgroundMode = true;
+let lastPendingSignature = "";
+let lastCheckError = "";
+let activeInstallPath = "";
+const trustedInstallPaths = new Set();
+
+function broadcastProgress(progress) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("tmp:update-progress", progress);
+  }
+}
+
+let tmpUpdate = null;
+
+function notify(title, body) {
+  if (!Notification.isSupported()) return;
+  const message = new Notification({ title, body, silent: false });
+  message.on("click", showWindow);
+  message.show();
+}
+
+function showWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) { void createWindow(); return; }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function setupTray() {
+  const icon = nativeImage.createFromPath(path.join(__dirname, "..", app.isPackaged ? "dist" : "public", "app-icon.png"));
+  tray = new Tray(icon.resize({ width: 16, height: 16 }));
+  tray.setToolTip("TMP 更新工具");
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: "打开 TMP 更新工具", click: showWindow },
+    { type: "separator" },
+    { label: "退出", click: () => { quitting = true; app.quit(); } },
+  ]));
+  tray.on("double-click", showWindow);
+  tray.on("click", showWindow);
+}
+
+function getTmpUpdate() {
+  if (!tmpUpdate) throw new Error("TMP 更新服务尚未初始化");
+  return tmpUpdate;
+}
+
+function pathKey(value) {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function trustInstallPath(installPath) {
+  if (!installPath || !path.isAbsolute(installPath)) {
+    throw new Error("安装目录无效");
+  }
+  const resolved = path.resolve(installPath);
+  trustedInstallPaths.add(pathKey(resolved));
+  activeInstallPath = resolved;
+  return resolved;
+}
+
+function requireTrustedInstallPath(installPath) {
+  if (
+    typeof installPath !== "string" ||
+    !trustedInstallPaths.has(pathKey(installPath))
+  ) {
+    throw new Error("安装目录未经本应用检测或选择");
+  }
+  activeInstallPath = path.resolve(installPath);
+  return activeInstallPath;
+}
+
+function assertTrustedSender(event) {
+  if (
+    !mainWindow ||
+    mainWindow.isDestroyed() ||
+    event.sender !== mainWindow.webContents ||
+    !event.senderFrame ||
+    event.senderFrame !== event.sender.mainFrame
+  ) {
+    throw new Error("拒绝未受信任的 IPC 调用");
+  }
+  const currentUrl = event.senderFrame.url || "";
+  const trusted = app.isPackaged
+    ? currentUrl.startsWith(`${APP_ORIGIN}/index.html`)
+    : currentUrl.startsWith(DEV_URL);
+  if (!trusted) throw new Error("拒绝非应用页面发起的 IPC 调用");
+}
+
+function hardenWebContents(contents) {
+  contents.on("will-navigate", (event, targetUrl) => {
+    const allowed = app.isPackaged
+      ? targetUrl.startsWith(`${APP_ORIGIN}/`)
+      : targetUrl.startsWith(DEV_URL);
+    if (!allowed) event.preventDefault();
+  });
+  contents.setWindowOpenHandler(() => ({ action: "deny" }));
+  contents.on("will-attach-webview", (event) => event.preventDefault());
+  if (app.isPackaged) {
+    contents.on("devtools-opened", () => contents.closeDevTools());
+  }
+}
+
+async function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1380,
+    height: 920,
+    minWidth: 860,
+    minHeight: 640,
+    show: false,
+    backgroundColor: nativeTheme.shouldUseDarkColors ? "#0e1217" : "#f3f1ec",
+    title: "TMP 更新工具",
+    icon: path.join(
+      __dirname,
+      "..",
+      app.isPackaged ? "dist" : "public",
+      "app-icon.png",
+    ),
+    autoHideMenuBar: true,
+    safeDialogs: true,
+    webPreferences: {
+      backgroundThrottling: false,
+      preload: path.join(
+        __dirname,
+        app.isPackaged ? "preload.release.cjs" : "preload.cjs",
+      ),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      webviewTag: false,
+      spellcheck: false,
+      devTools: !app.isPackaged,
+    },
+  });
+
+  mainWindow.removeMenu();
+  mainWindow.on("close", (event) => {
+    if (!quitting && backgroundMode && tray) {
+      event.preventDefault();
+      mainWindow.hide();
+    }
+  });
+  mainWindow.webContents.on(
+    "did-fail-load",
+    (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
+      if (!isMainFrame) return;
+      const message = `${new Date().toISOString()} ${errorCode} ${errorDescription} ${validatedUrl}\n`;
+      void fsp
+        .appendFile(
+          path.join(app.getPath("userData"), "load-error.log"),
+          message,
+        )
+        .catch(() => undefined);
+      if (!mainWindow.isVisible()) mainWindow.show();
+    },
+  );
+  mainWindow.once("ready-to-show", () => mainWindow.show());
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    const docsUrl = `${TMP_API_BASE}/docs/`;
+    if (url === docsUrl) void shell.openExternal(docsUrl);
+    return { action: "deny" };
+  });
+  if (app.isPackaged) {
+    mainWindow.webContents.on("before-input-event", (event, input) => {
+      const key = String(input.key || "").toLowerCase();
+      const blocked =
+        key === "f12" ||
+        (input.control && input.shift && ["i", "j", "c"].includes(key)) ||
+        (input.control && key === "u");
+      if (blocked) event.preventDefault();
+    });
+  }
+
+  if (!app.isPackaged) {
+    await mainWindow.loadURL(DEV_URL);
+  } else {
+    await mainWindow.loadURL(`${APP_ORIGIN}/index.html`);
+  }
+}
+
+async function registerAppProtocol() {
+  const distRoot = path.resolve(__dirname, "..", "dist");
+  const contentTypes = new Map([
+    [".html", "text/html; charset=utf-8"],
+    [".js", "text/javascript; charset=utf-8"],
+    [".css", "text/css; charset=utf-8"],
+    [".svg", "image/svg+xml"],
+    [".png", "image/png"],
+    [".woff2", "font/woff2"],
+  ]);
+  protocol.handle("tmp-app", async (request) => {
+    try {
+      const url = new URL(request.url);
+      if (url.hostname !== "bundle")
+        return new Response("Not found", { status: 404 });
+      const relative =
+        decodeURIComponent(url.pathname).replace(/^\/+/, "") || "index.html";
+      const target = path.resolve(distRoot, relative);
+      if (!target.startsWith(distRoot + path.sep)) {
+        return new Response("Forbidden", { status: 403 });
+      }
+      const data = await fsp.readFile(target);
+      const type =
+        contentTypes.get(path.extname(target).toLowerCase()) ||
+        "application/octet-stream";
+      return new Response(data, {
+        status: 200,
+        headers: {
+          "Content-Type": type,
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    } catch {
+      return new Response("Not found", { status: 404 });
+    }
+  });
+}
+
+ipcMain.handle("tmp:detect-install", async (event) => {
+  assertTrustedSender(event);
+  const result = await getTmpUpdate().detectInstallPath();
+  if (result.ok && result.installPath) trustInstallPath(result.installPath);
+  return result;
+});
+
+ipcMain.handle("tmp:choose-install", async (event) => {
+  assertTrustedSender(event);
+  if (!mainWindow) return { ok: false, message: "窗口尚未就绪" };
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "选择 TruckersMP 的 installation 文件夹",
+    properties: ["openDirectory"],
+    buttonLabel: "选择此目录",
+  });
+  if (result.canceled || !result.filePaths[0]) {
+    return { ok: false, cancelled: true, message: "未选择目录" };
+  }
+  try {
+    const installPath = await getTmpUpdate().validateInstallPath(
+      result.filePaths[0],
+    );
+    trustInstallPath(installPath);
+    return {
+      ok: true,
+      installPath,
+      launcherConfig: "",
+      message: "已选择 TruckersMP 安装目录",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+});
+
+ipcMain.handle("tmp:scan", async (event, options) => {
+  try {
+    assertTrustedSender(event);
+    if (!options || typeof options !== "object")
+      throw new Error("扫描参数无效");
+    const installPath = requireTrustedInstallPath(options.installPath);
+    const result = await getTmpUpdate().scan({
+      installPath,
+      baseUrl: TMP_API_BASE,
+      force: true,
+    });
+    if (result.ok) {
+      lastCheckError = "";
+      const pending = result.files.filter((file) => file.state === "missing" || file.state === "outdated");
+      const signature = pending.map((file) => `${file.filePath}:${file.md5}`).sort().join("|");
+      if (signature && signature !== lastPendingSignature && mainWindow && !mainWindow.isVisible()) {
+        notify("发现 TMP 更新", `${pending.length} 个文件需要更新，点击查看。`);
+      }
+      lastPendingSignature = signature;
+    }
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (mainWindow && !mainWindow.isVisible() && message !== lastCheckError) {
+      notify("TMP 检测失败", message.slice(0, 160));
+      lastCheckError = message;
+    }
+    return {
+      ok: false,
+      message,
+      files: [],
+    };
+  }
+});
+
+ipcMain.handle("tmp:report-check-error", (event, reason) => {
+  assertTrustedSender(event);
+  const message = String(reason || "连接更新服务失败").slice(0, 160);
+  if (mainWindow && !mainWindow.isVisible() && message !== lastCheckError) {
+    notify("TMP 检测失败", message);
+  }
+  lastCheckError = message;
+});
+
+ipcMain.handle("tmp:update", async (event, options) => {
+  try {
+    assertTrustedSender(event);
+    if (
+      !options ||
+      typeof options !== "object" ||
+      !Array.isArray(options.paths)
+    ) {
+      throw new Error("更新参数无效");
+    }
+    if (
+      options.paths.length === 0 ||
+      options.paths.length > 500 ||
+      options.paths.some((item) => typeof item !== "string")
+    ) {
+      throw new Error("更新文件选择无效");
+    }
+    const installPath = requireTrustedInstallPath(options.installPath);
+    const result = await getTmpUpdate().update({
+      installPath,
+      baseUrl: TMP_API_BASE,
+      paths: [...new Set(options.paths)],
+    });
+    if (mainWindow && !mainWindow.isVisible()) {
+      notify(result.failed ? "TMP 更新需要处理" : result.cancelled ? "TMP 更新已取消" : "TMP 更新完成", result.message);
+    }
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (mainWindow && !mainWindow.isVisible()) notify("TMP 更新失败", message.slice(0, 160));
+    return {
+      ok: false,
+      updated: 0,
+      failed: 0,
+      errors: [],
+      message,
+    };
+  }
+});
+
+ipcMain.handle("tmp:cancel-update", (event) => {
+  assertTrustedSender(event);
+  return getTmpUpdate().cancel();
+});
+
+ipcMain.handle("tmp:set-background", async (event, enabled) => {
+  assertTrustedSender(event);
+  backgroundMode = enabled === true;
+  await fsp.writeFile(path.join(app.getPath("userData"), "preferences.json"), JSON.stringify({ backgroundMode }));
+  return { backgroundMode };
+});
+
+ipcMain.handle("tmp:get-background", (event) => {
+  assertTrustedSender(event);
+  return { backgroundMode };
+});
+
+ipcMain.handle("tmp:export-diagnostics", async (event, snapshot) => {
+  assertTrustedSender(event);
+  const data = snapshot && typeof snapshot === "object" ? snapshot : {};
+  const files = Array.isArray(data.files) ? data.files.slice(0, 5000).map((file) => ({
+    path: String(file.path || "").slice(0, 500),
+    state: String(file.state || "").slice(0, 40),
+    error: String(file.error || "").slice(0, 1000),
+  })) : [];
+  const activities = Array.isArray(data.activities) ? data.activities.slice(0, 100).map((entry) => ({
+    time: String(entry.time || "").slice(0, 50),
+    level: String(entry.level || "").slice(0, 20),
+    message: String(entry.message || "").slice(0, 1000),
+  })) : [];
+  const output = { exportedAt: new Date().toISOString(), appVersion: app.getVersion(), platform: process.platform,
+    installPath: activeInstallPath, sourceState: String(data.sourceState || "").slice(0, 30),
+    lastScannedAt: String(data.lastScannedAt || "").slice(0, 60), files, activities };
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: "导出 TMP 诊断日志",
+    defaultPath: `TMP-Diagnostics-${new Date().toISOString().slice(0, 10)}.json`,
+    filters: [{ name: "JSON", extensions: ["json"] }],
+  });
+  if (result.canceled || !result.filePath) return { ok: false, cancelled: true };
+  await fsp.writeFile(result.filePath, JSON.stringify(output, null, 2), "utf8");
+  return { ok: true };
+});
+
+if (gotLock) {
+  app.whenReady().then(async () => {
+    session.defaultSession.setPermissionRequestHandler(
+      (_contents, _permission, callback) => {
+        callback(false);
+      },
+    );
+    session.defaultSession.setPermissionCheckHandler(() => false);
+    session.defaultSession.webRequest.onBeforeRequest(
+      { urls: ["<all_urls>"] },
+      (details, callback) => {
+        try {
+          const target = new URL(details.url);
+          const allowed =
+            target.protocol === "tmp-app:" ||
+            target.origin === TMP_API_BASE ||
+            (!app.isPackaged && target.origin === new URL(DEV_URL).origin);
+          callback({ cancel: !allowed });
+        } catch {
+          callback({ cancel: true });
+        }
+      },
+    );
+    await registerAppProtocol();
+    tmpUpdate = new TmpUpdateManager({
+      configPaths: [
+        path.join(
+          app.getPath("appData"),
+          "TruckersMP",
+          "launcher-options.json",
+        ),
+        path.join(
+          process.env.LOCALAPPDATA ||
+            path.join(app.getPath("appData"), "..", "Local"),
+          "TruckersMP",
+          "launcher-options.json",
+        ),
+      ],
+      onProgress: broadcastProgress,
+      fetcher: (input, init) => net.fetch(input, init),
+    });
+    try {
+      const preferences = JSON.parse(await fsp.readFile(path.join(app.getPath("userData"), "preferences.json"), "utf8"));
+      backgroundMode = preferences.backgroundMode !== false;
+    } catch { backgroundMode = true; }
+    setupTray();
+    void createWindow();
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) void createWindow();
+    });
+  });
+
+  app.on("web-contents-created", (_event, contents) => {
+    hardenWebContents(contents);
+  });
+
+  app.on("second-instance", () => {
+    if (!mainWindow) return;
+    showWindow();
+  });
+}
+
+app.on("before-quit", () => { quitting = true; tmpUpdate?.cancel(); });
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin" && (!backgroundMode || quitting)) app.quit();
+});
