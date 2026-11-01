@@ -122,7 +122,8 @@ jobs:
           set -euo pipefail
           url="https://cnb.cool/${CNB_REPO_SLUG}/-/releases/tag/v${VERSION}"
           for attempt in {1..20}; do
-            if curl --fail --silent --show-error --location "$url" | grep -q "Download source code"; then
+            page="$(curl --fail --silent --show-error --location "$url" || true)"
+            if grep -q "Download source code" <<< "$page"; then
               exit 0
             fi
             sleep 15
