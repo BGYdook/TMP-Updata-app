@@ -25,7 +25,13 @@ if (obfuscation.status !== 0) process.exit(obfuscation.status ?? 1);
 
 const result = spawnSync(
   builder,
-  ["--win", "nsis", "--config.electronDist=node_modules/electron/dist"],
+  [
+    "--win",
+    "nsis",
+    "--publish",
+    "never",
+    "--config.electronDist=node_modules/electron/dist",
+  ],
   {
     cwd: process.cwd(),
     env,
