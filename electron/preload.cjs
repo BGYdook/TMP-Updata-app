@@ -12,8 +12,18 @@ const api = Object.freeze({
     ipcRenderer.invoke("tmp:update", {
       installPath: String(options?.installPath || ""),
       paths: Array.isArray(options?.paths) ? options.paths.slice(0, 500) : [],
+      forceRepair: options?.forceRepair === true,
     }),
   cancelUpdate: () => ipcRenderer.invoke("tmp:cancel-update"),
+  pauseUpdate: () => ipcRenderer.invoke("tmp:pause-update"),
+  resumeUpdate: () => ipcRenderer.invoke("tmp:resume-update"),
+  listBackups: (installPath) => ipcRenderer.invoke("tmp:list-backups", String(installPath || "")),
+  restoreBackup: (options) => ipcRenderer.invoke("tmp:restore-backup", {
+    installPath: String(options?.installPath || ""),
+    id: String(options?.id || ""),
+  }),
+  cleanupBackups: (installPath) => ipcRenderer.invoke("tmp:cleanup-backups", String(installPath || "")),
+  diagnoseNetwork: () => ipcRenderer.invoke("tmp:diagnose-network"),
   getBackgroundMode: () => ipcRenderer.invoke("tmp:get-background"),
   setBackgroundMode: (enabled) => ipcRenderer.invoke("tmp:set-background", enabled === true),
   exportDiagnostics: (snapshot) => ipcRenderer.invoke("tmp:export-diagnostics", snapshot),

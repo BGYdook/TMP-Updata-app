@@ -16,7 +16,7 @@ let desktop;
 try {
   desktop = await electron.launch({
     executablePath,
-    args: [path.resolve(".")],
+    args: [`--user-data-dir=${root}`, path.resolve(".")],
     env: { ...process.env, APPDATA: root, LOCALAPPDATA: root },
     timeout: 30_000,
   });

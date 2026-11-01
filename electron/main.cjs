@@ -118,12 +118,15 @@ async function getLatestCnbRelease() {
   if (!tag) throw new Error("CNB 暂无可用的版本发布");
   const version = tag.slice(1);
   const assetName = `TMP-Update-${version}-Setup.exe`;
+  const checksumName = `${assetName}.sha256`;
   return {
     version,
     tag,
     assetName,
+    checksumName,
     releaseUrl: `https://cnb.cool/${CNB_REPO_SLUG}/-/releases/tag/${tag}`,
     downloadUrl: `https://cnb.cool/${CNB_REPO_SLUG}/-/releases/download/${tag}/${assetName}`,
+    checksumUrl: `https://cnb.cool/${CNB_REPO_SLUG}/-/releases/download/${tag}/${checksumName}`,
   };
 }
 
@@ -409,6 +412,7 @@ ipcMain.handle("tmp:update", async (event, options) => {
       installPath,
       baseUrl: TMP_API_BASE,
       paths: [...new Set(options.paths)],
+      forceRepair: options.forceRepair === true,
     });
     if (mainWindow && !mainWindow.isVisible()) {
       notify(result.failed ? "TMP 更新需要处理" : result.cancelled ? "TMP 更新已取消" : "TMP 更新完成", result.message);
@@ -430,6 +434,50 @@ ipcMain.handle("tmp:update", async (event, options) => {
 ipcMain.handle("tmp:cancel-update", (event) => {
   assertTrustedSender(event);
   return getTmpUpdate().cancel();
+});
+
+ipcMain.handle("tmp:pause-update", (event) => {
+  assertTrustedSender(event);
+  return getTmpUpdate().pause();
+});
+
+ipcMain.handle("tmp:resume-update", (event) => {
+  assertTrustedSender(event);
+  return getTmpUpdate().resume();
+});
+
+ipcMain.handle("tmp:list-backups", async (event, installPath) => {
+  assertTrustedSender(event);
+  return { ok: true, backups: await getTmpUpdate().listBackups(requireTrustedInstallPath(String(installPath || ""))) };
+});
+
+ipcMain.handle("tmp:restore-backup", async (event, options) => {
+  assertTrustedSender(event);
+  try {
+    const installPath = requireTrustedInstallPath(String(options?.installPath || ""));
+    return await getTmpUpdate().restoreBackup(installPath, String(options?.id || ""));
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle("tmp:cleanup-backups", async (event, installPath) => {
+  assertTrustedSender(event);
+  try {
+    const resolved = requireTrustedInstallPath(String(installPath || ""));
+    return await getTmpUpdate().cleanupBackups(resolved);
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle("tmp:diagnose-network", async (event) => {
+  assertTrustedSender(event);
+  try {
+    return await getTmpUpdate().diagnose(TMP_API_BASE);
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  }
 });
 
 ipcMain.handle("tmp:set-background", async (event, enabled) => {
@@ -520,23 +568,36 @@ ipcMain.handle("tmp:install-app-update", async (event) => {
         stalled: false,
       });
     }
-    const response = await net.fetch(latest.downloadUrl, {
-      headers: { Accept: "application/octet-stream", "User-Agent": "TMP-File-Mirror-Desktop" },
-      cache: "no-cache",
-    });
-    if (!response.ok || !response.body) throw new Error(`下载更新安装包失败（HTTP ${response.status}）`);
-    const finalUrl = new URL(response.url || latest.downloadUrl);
-    if (![CNB_RELEASE_ORIGIN, CNB_CDN_ORIGIN, CNB_ASSET_ORIGIN].includes(finalUrl.origin)) {
-      throw new Error("更新安装包被重定向到非受信任地址");
-    }
-    const contentLength = Number(response.headers.get("content-length")) || 0;
-    if (contentLength > 600 * 1024 * 1024) throw new Error("更新安装包超过 600 MB 安全上限");
     const updateDirectory = path.join(app.getPath("userData"), "updates");
     await fsp.mkdir(updateDirectory, { recursive: true });
     const temporary = path.join(updateDirectory, `.${latest.assetName}.part`);
     const installer = path.join(updateDirectory, latest.assetName);
-    const handle = await fsp.open(temporary, "w");
-    let downloaded = 0;
+    let partialSize = 0;
+    try {
+      partialSize = (await fsp.stat(temporary)).size;
+    } catch { partialSize = 0; }
+    const downloadHeaders = { Accept: "application/octet-stream", "User-Agent": "TMP-File-Mirror-Desktop" };
+    if (partialSize > 0) downloadHeaders.Range = `bytes=${partialSize}-`;
+    let response = await net.fetch(latest.downloadUrl, {
+      headers: downloadHeaders,
+      cache: "no-cache",
+    });
+    if (!response.ok || !response.body) throw new Error(`下载更新安装包失败（HTTP ${response.status}）`);
+    const resumed = partialSize > 0 && response.status === 206 && String(response.headers.get("content-range") || "").startsWith(`bytes ${partialSize}-`);
+    if (partialSize > 0 && !resumed) {
+      partialSize = 0;
+      await fsp.rm(temporary, { force: true });
+    }
+    const finalUrl = new URL(response.url || latest.downloadUrl);
+    if (![CNB_RELEASE_ORIGIN, CNB_CDN_ORIGIN, CNB_ASSET_ORIGIN].includes(finalUrl.origin)) {
+      throw new Error("更新安装包被重定向到非受信任地址");
+    }
+    const contentLength = (Number(response.headers.get("content-length")) || 0) + partialSize;
+    if (contentLength > 600 * 1024 * 1024) throw new Error("更新安装包超过 600 MB 安全上限");
+    const handle = await fsp.open(temporary, partialSize > 0 ? "a" : "w");
+    const sha256 = crypto.createHash("sha256");
+    if (partialSize > 0) sha256.update(await fsp.readFile(temporary));
+    let downloaded = partialSize;
     const startedAt = Date.now();
     let lastProgressAt = 0;
     let lastChunkAt = Date.now();
@@ -566,17 +627,38 @@ ipcMain.handle("tmp:install-app-update", async (event) => {
         lastChunkAt = Date.now();
         if (downloaded > 600 * 1024 * 1024) throw new Error("更新安装包超过 600 MB 安全上限");
         await handle.write(bytes);
+        sha256.update(bytes);
         if (Date.now() - lastProgressAt >= 100 || downloaded === contentLength) {
           lastProgressAt = Date.now();
           sendProgress();
         }
       }
       await handle.close();
+      const actualSha256 = sha256.digest("hex");
+      sendProgress("verifying", "正在校验安装包完整性…");
+      let checksumVerified = false;
+      if (latest.checksumUrl) {
+        const checksumResponse = await net.fetch(latest.checksumUrl, {
+          headers: { Accept: "text/plain", "User-Agent": "TMP-File-Mirror-Desktop" },
+          cache: "no-cache",
+        });
+        if (checksumResponse.ok) {
+          const expected = (await checksumResponse.text()).match(/\b[a-f0-9]{64}\b/i)?.[0]?.toLowerCase();
+          if (!expected) throw new Error("安装包校验文件格式无效");
+          if (expected !== actualSha256) throw new Error("安装包 SHA-256 校验失败，已拒绝安装");
+          checksumVerified = true;
+        } else if (checksumResponse.status !== 404) {
+          throw new Error(`获取安装包校验文件失败（HTTP ${checksumResponse.status}）`);
+        }
+      }
       await fsp.rm(installer, { force: true });
       await fsp.rename(temporary, installer);
+      if (checksumVerified) sendProgress("done", "安装包已通过 SHA-256 校验，正在启动安装程序…");
     } catch (error) {
       await handle.close().catch(() => undefined);
-      await fsp.rm(temporary, { force: true }).catch(() => undefined);
+      if (/校验|格式无效|HTTP 404|超过 600 MB/.test(error instanceof Error ? error.message : String(error))) {
+        await fsp.rm(temporary, { force: true }).catch(() => undefined);
+      }
       throw error;
     } finally {
       if (progressTimer) clearInterval(progressTimer);
@@ -654,6 +736,7 @@ if (gotLock) {
           "launcher-options.json",
         ),
       ],
+      backupRoot: path.join(app.getPath("userData"), "backups"),
       onProgress: broadcastProgress,
       fetcher: (input, init) => net.fetch(input, init),
     });

@@ -2342,6 +2342,75 @@ tbody tr:last-child td {
   font-size: 11px;
 }
 
+.backup-modal {
+  max-width: 680px;
+}
+
+.backup-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 14px 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.backup-toolbar .text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.backup-list {
+  display: grid;
+  gap: 8px;
+  max-height: 390px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.backup-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-muted);
+}
+
+@media (max-width: 560px) {
+  .backup-entry {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .backup-entry .button {
+    margin-left: auto;
+  }
+}
+
+.backup-entry > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.backup-entry strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.backup-entry span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .guide-divider {
   display: flex;
   align-items: center;

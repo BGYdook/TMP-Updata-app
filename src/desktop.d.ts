@@ -62,6 +62,22 @@ declare global {
     stalled: boolean;
   }
 
+  interface DesktopBackup {
+    id: string;
+    filePath: string;
+    md5: string;
+    size: number;
+    createdAt: string;
+  }
+
+  interface DesktopNetworkDiagnostic {
+    ok: boolean;
+    latencyMs?: number;
+    status?: number;
+    files?: number;
+    message: string;
+  }
+
   interface TmpDesktopApi {
     isDesktop: true;
     detectInstallPath(): Promise<DesktopDetectionResult>;
@@ -75,8 +91,15 @@ declare global {
       installPath: string;
       baseUrl: string;
       paths: string[];
+      forceRepair?: boolean;
     }): Promise<DesktopUpdateResult>;
     cancelUpdate(): Promise<{ ok: boolean }>;
+    pauseUpdate(): Promise<{ ok: boolean; paused: boolean }>;
+    resumeUpdate(): Promise<{ ok: boolean; paused: boolean }>;
+    listBackups(installPath: string): Promise<{ ok: boolean; backups: DesktopBackup[] }>;
+    restoreBackup(options: { installPath: string; id: string }): Promise<{ ok: boolean; filePath?: string; message: string }>;
+    cleanupBackups(installPath: string): Promise<{ ok: boolean; removed?: number; remaining?: number; message?: string }>;
+    diagnoseNetwork(): Promise<DesktopNetworkDiagnostic>;
     getBackgroundMode(): Promise<{ backgroundMode: boolean }>;
     setBackgroundMode(enabled: boolean): Promise<{ backgroundMode: boolean }>;
     exportDiagnostics(snapshot: {

@@ -11,6 +11,7 @@ const MAX_FILE_BYTES = 400 * 1024 * 1024;
 const FILE_WORKERS = 4;
 const DOWNLOAD_ATTEMPTS = 3;
 const RETRY_DELAYS = [1000, 2500];
+const BACKUP_RETENTION = 3;
 
 function retryable(error) {
   if (error?.retryable === false) return false;
@@ -136,14 +137,164 @@ async function ensureGamesClosed() {
 }
 
 class TmpUpdateManager {
-  constructor({ configPaths, onProgress, fetcher }) {
+  constructor({ configPaths, onProgress, fetcher, backupRoot }) {
     this.configPaths = configPaths;
     this.onProgress = onProgress;
     this.fetcher = fetcher || globalThis.fetch;
+    this.backupRoot = backupRoot || path.join(process.cwd(), ".tmp-update-backups");
+    this.backupIndexPath = path.join(this.backupRoot, "index.json");
     this.manifest = null;
     this.hashCache = new Map();
     this.updateController = null;
     this.updating = false;
+    this.paused = false;
+    this.pauseWaiters = [];
+  }
+
+  async waitIfPaused(signal) {
+    if (!this.paused) return;
+    await new Promise((resolve, reject) => {
+      const waiter = { resolve, reject };
+      const abort = () => {
+        this.pauseWaiters = this.pauseWaiters.filter((item) => item !== waiter);
+        reject(new DOMException("更新已取消", "AbortError"));
+      };
+      waiter.abort = abort;
+      if (signal.aborted) return abort();
+      signal.addEventListener("abort", abort, { once: true });
+      this.pauseWaiters.push(waiter);
+    });
+  }
+
+  pause() {
+    if (!this.updating) return { ok: false, paused: false };
+    this.paused = true;
+    return { ok: true, paused: true };
+  }
+
+  resume() {
+    this.paused = false;
+    const waiters = this.pauseWaiters.splice(0);
+    for (const waiter of waiters) waiter.resolve();
+    return { ok: true, paused: false };
+  }
+
+  async readBackupIndex() {
+    try {
+      const value = JSON.parse(await fsp.readFile(this.backupIndexPath, "utf8"));
+      return Array.isArray(value) ? value : [];
+    } catch {
+      return [];
+    }
+  }
+
+  async writeBackupIndex(entries) {
+    await fsp.mkdir(this.backupRoot, { recursive: true });
+    const temporary = `${this.backupIndexPath}.part`;
+    await fsp.writeFile(temporary, JSON.stringify(entries.slice(-500), null, 2), "utf8");
+    await fsp.rename(temporary, this.backupIndexPath);
+  }
+
+  async createBackup(installPath, file, target) {
+    try {
+      await fsp.stat(target);
+    } catch (error) {
+      if (error?.code === "ENOENT") return null;
+      throw error;
+    }
+    const installKey = crypto.createHash("sha256").update(path.resolve(installPath)).digest("hex").slice(0, 16);
+    const id = `${Date.now()}-${crypto.randomUUID()}`;
+    const backupPath = path.join(this.backupRoot, installKey, id, ...fileSegments(file.filePath));
+    await fsp.mkdir(path.dirname(backupPath), { recursive: true });
+    await fsp.copyFile(target, backupPath);
+    const sourceStat = await fsp.stat(target);
+    const sourceMd5 = await hashFile(target);
+    const entry = {
+      id,
+      installPath: path.resolve(installPath),
+      filePath: file.filePath,
+      backupPath,
+      md5: sourceMd5,
+      size: sourceStat.size,
+      createdAt: new Date().toISOString(),
+    };
+    const entries = await this.readBackupIndex();
+    entries.push(entry);
+    await this.writeBackupIndex(entries);
+    return entry;
+  }
+
+  async listBackups(installPath) {
+    const resolved = path.resolve(installPath);
+    return (await this.readBackupIndex())
+      .filter((entry) => path.resolve(String(entry.installPath || "")) === resolved)
+      .filter((entry) => path.resolve(String(entry.backupPath || "")).startsWith(path.resolve(this.backupRoot) + path.sep))
+      .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)))
+      .map(({ id, filePath, md5, size, createdAt }) => ({ id, filePath, md5, size, createdAt }));
+  }
+
+  async restoreBackup(installPath, id) {
+    const resolved = await this.validateInstallPath(installPath);
+    const entries = await this.readBackupIndex();
+    const entry = entries.find((item) => item.id === id && path.resolve(String(item.installPath || "")) === resolved);
+    if (!entry) throw new Error("找不到要恢复的备份");
+    if (!path.resolve(String(entry.backupPath || "")).startsWith(path.resolve(this.backupRoot) + path.sep)) {
+      throw new Error("备份路径无效，已拒绝恢复");
+    }
+    const backupStat = await fsp.stat(entry.backupPath);
+    if (backupStat.size !== Number(entry.size)) throw new Error("备份文件大小不一致，已拒绝恢复");
+    const target = targetPath(resolved, entry.filePath);
+    const temporary = `${target}.tmpup-restore-${crypto.randomUUID()}.part`;
+    await fsp.mkdir(path.dirname(target), { recursive: true });
+    await fsp.copyFile(entry.backupPath, temporary);
+    const restoredMd5 = await hashFile(temporary);
+    if (restoredMd5 !== String(entry.md5).toLowerCase()) {
+      await fsp.rm(temporary, { force: true });
+      throw new Error("备份 MD5 校验失败，已拒绝恢复");
+    }
+    await fsp.rm(target, { force: true });
+    await fsp.rename(temporary, target);
+    const installed = await fsp.stat(target);
+    this.hashCache.set(target, { mtimeMs: installed.mtimeMs, size: installed.size, md5: restoredMd5 });
+    return { ok: true, filePath: entry.filePath, message: `已恢复 ${entry.filePath}` };
+  }
+
+  async cleanupBackups(installPath, keep = BACKUP_RETENTION) {
+    const resolved = path.resolve(installPath);
+    const entries = await this.readBackupIndex();
+    const matching = entries
+      .filter((entry) => path.resolve(String(entry.installPath || "")) === resolved)
+      .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
+    const keepIds = new Set();
+    const counts = new Map();
+    for (const entry of matching) {
+      const count = counts.get(entry.filePath) || 0;
+      if (count < Math.max(1, Number(keep) || BACKUP_RETENTION)) {
+        counts.set(entry.filePath, count + 1);
+        keepIds.add(entry.id);
+      } else {
+        if (path.resolve(String(entry.backupPath || "")).startsWith(path.resolve(this.backupRoot) + path.sep)) {
+          await fsp.rm(entry.backupPath, { force: true }).catch(() => undefined);
+          await fsp.rm(path.dirname(entry.backupPath), { recursive: true, force: true }).catch(() => undefined);
+        }
+      }
+    }
+    await this.writeBackupIndex(entries.filter((entry) => path.resolve(String(entry.installPath || "")) !== resolved || keepIds.has(entry.id)));
+    return { ok: true, removed: matching.length - keepIds.size, remaining: keepIds.size };
+  }
+
+  async diagnose(baseUrl) {
+    const base = normalizeBaseUrl(baseUrl);
+    const startedAt = Date.now();
+    const response = await this.fetcher(`${base}/api/tmp/files`, {
+      headers: { Accept: "application/json", "User-Agent": "TMP-Sync-Desktop" },
+      cache: "no-store",
+      signal: AbortSignal.timeout(10_000),
+    });
+    const latencyMs = Date.now() - startedAt;
+    if (!response.ok) return { ok: false, latencyMs, status: response.status, message: `接口返回 HTTP ${response.status}` };
+    const payload = await response.json();
+    return { ok: true, latencyMs, status: response.status, files: Array.isArray(payload?.data) ? payload.data.length : 0, message: `接口正常，延迟 ${latencyMs} ms` };
   }
 
   async detectInstallPath() {
@@ -291,16 +442,23 @@ class TmpUpdateManager {
     const parent = path.dirname(target);
     await fsp.mkdir(parent, { recursive: true });
     const token = crypto.randomUUID();
-    const temporary = path.join(parent, `.${path.basename(target)}.tmpup-${token}.part`);
-    const backup = path.join(parent, `.${path.basename(target)}.tmpup-${token}.bak`);
+    const temporary = path.join(parent, `.${path.basename(target)}.tmpup.part`);
+    const rollback = path.join(parent, `.${path.basename(target)}.tmpup-${token}.rollback`);
     const requestedUrl = resolveDownloadUrl(baseUrl, file);
     let actual;
     for (let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt += 1) {
       let handle;
       try {
         report(0, file.fileSize, "downloading", `下载 ${file.filePath}（${attempt}/${DOWNLOAD_ATTEMPTS}）`);
+        let partialSize = 0;
+        try {
+          partialSize = (await fsp.stat(temporary)).size;
+          if (partialSize > file.fileSize) partialSize = 0;
+        } catch { partialSize = 0; }
+        const headers = { Accept: "application/octet-stream", "User-Agent": "TMP-Sync-Desktop" };
+        if (partialSize > 0) headers.Range = `bytes=${partialSize}-`;
         const response = await this.fetcher(requestedUrl, {
-          headers: { Accept: "application/octet-stream", "User-Agent": "TMP-Sync-Desktop" },
+          headers,
           cache: "no-cache",
           signal: AbortSignal.any([this.updateController.signal, AbortSignal.timeout(900_000)]),
         });
@@ -320,17 +478,27 @@ class TmpUpdateManager {
           error.retryable = false;
           throw error;
         }
-        const contentLength = Number(response.headers.get("content-length")) || file.fileSize;
+        const resumed = partialSize > 0 && response.status === 206 && String(response.headers.get("content-range") || "").startsWith(`bytes ${partialSize}-`);
+        if (partialSize > 0 && !resumed) {
+          partialSize = 0;
+          await fsp.rm(temporary, { force: true });
+        }
+        const contentLength = (Number(response.headers.get("content-length")) || file.fileSize - partialSize) + partialSize;
         if (contentLength > MAX_FILE_BYTES) {
           const error = new Error("文件超过 400 MB 安全上限");
           error.retryable = false;
           throw error;
         }
         const hasher = crypto.createHash("md5");
-        handle = await fsp.open(temporary, "wx");
-        let downloaded = 0;
+        if (partialSize > 0) {
+          const existing = await fsp.readFile(temporary);
+          hasher.update(existing);
+        }
+        handle = await fsp.open(temporary, partialSize > 0 ? "a" : "w");
+        let downloaded = partialSize;
         let lastEmit = 0;
         for await (const chunk of response.body) {
+          await this.waitIfPaused(this.updateController.signal);
           if (this.updateController.signal.aborted) throw new DOMException("更新已取消", "AbortError");
           const bytes = Buffer.from(chunk);
           if (downloaded + bytes.length > MAX_FILE_BYTES) {
@@ -352,11 +520,16 @@ class TmpUpdateManager {
         if (downloaded !== file.fileSize) throw new Error(`文件长度不一致：期望 ${file.fileSize} 字节，实际 ${downloaded} 字节`);
         report(downloaded, file.fileSize, "verifying", `正在校验 ${file.filePath}`);
         actual = hasher.digest("hex");
-        if (actual !== file.md5) throw new Error("MD5 校验失败，文件可能不完整");
+        if (actual !== file.md5) {
+          await fsp.rm(temporary, { force: true });
+          throw new Error("MD5 校验失败，文件可能不完整");
+        }
         break;
       } catch (error) {
         await handle?.close().catch(() => undefined);
-        await fsp.rm(temporary, { force: true }).catch(() => undefined);
+        if (error?.name !== "AbortError" && error?.message?.includes("MD5 校验失败")) {
+          await fsp.rm(temporary, { force: true }).catch(() => undefined);
+        }
         if (this.updateController.signal.aborted) throw new DOMException("更新已取消", "AbortError");
         if (attempt === DOWNLOAD_ATTEMPTS || !retryable(error)) throw error;
         report(0, file.fileSize, "retrying", `${messageOf(error)}，${RETRY_DELAYS[attempt - 1] / 1000} 秒后重试（${attempt + 1}/${DOWNLOAD_ATTEMPTS}）`);
@@ -366,15 +539,17 @@ class TmpUpdateManager {
 
     report(file.fileSize, file.fileSize, "installing", `正在安装 ${file.filePath}`);
     let movedOld = false;
+    let backupEntry = null;
     try {
+      backupEntry = await this.createBackup(installPath, file, target);
       try {
-        await fsp.rename(target, backup);
+        await fsp.rename(target, rollback);
         movedOld = true;
       } catch (error) {
         if (!error || error.code !== "ENOENT") throw error;
       }
       await fsp.rename(temporary, target);
-      if (movedOld) await fsp.rm(backup, { force: true });
+      if (movedOld) await fsp.rm(rollback, { force: true });
       const installed = await fsp.stat(target);
       this.hashCache.set(target, {
         mtimeMs: installed.mtimeMs,
@@ -382,16 +557,17 @@ class TmpUpdateManager {
         md5: actual,
       });
     } catch (error) {
-      if (movedOld && !fs.existsSync(target) && fs.existsSync(backup)) {
-        await fsp.rename(backup, target).catch(() => undefined);
+      if (movedOld && !fs.existsSync(target) && fs.existsSync(rollback)) {
+        await fsp.rename(rollback, target).catch(() => undefined);
       }
       throw error;
     } finally {
       await fsp.rm(temporary, { force: true }).catch(() => undefined);
     }
+    if (backupEntry) await this.cleanupBackups(installPath).catch(() => undefined);
   }
 
-  async update({ installPath, baseUrl, paths }) {
+  async update({ installPath, baseUrl, paths, forceRepair = false }) {
     if (this.updating) throw new Error("TMP 更新正在进行中");
     this.updating = true;
     this.updateController = new AbortController();
@@ -405,9 +581,9 @@ class TmpUpdateManager {
       const inspected = await Promise.all(
         candidates.map((file) => this.inspect(resolved, file)),
       );
-      const targets = inspected.filter(
-        (file) => file.state === "outdated" || file.state === "missing",
-      );
+      const targets = inspected.filter((file) => forceRepair
+        ? ["current", "outdated", "missing", "error"].includes(file.state)
+        : file.state === "outdated" || file.state === "missing");
       if (!targets.length) {
         return { ok: true, updated: 0, failed: 0, errors: [], message: "没有需要更新的文件" };
       }
@@ -458,6 +634,7 @@ class TmpUpdateManager {
       const worker = async () => {
         while (true) {
           if (this.updateController.signal.aborted) return;
+          await this.waitIfPaused(this.updateController.signal);
           const index = cursor++;
           if (index >= targets.length) return;
           const file = targets[index];
@@ -516,6 +693,8 @@ class TmpUpdateManager {
       };
     } finally {
       this.updating = false;
+      this.paused = false;
+      for (const waiter of this.pauseWaiters.splice(0)) waiter.resolve();
       this.updateController = null;
     }
   }

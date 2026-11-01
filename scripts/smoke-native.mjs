@@ -76,6 +76,7 @@ try {
 
   const manager = new TmpUpdateManager({
     configPaths: [path.join(root, "missing.json"), configPath],
+    backupRoot: path.join(root, "backups"),
     onProgress: (progress) => progressEvents.push(progress),
   });
   const detection = await manager.detectInstallPath();
@@ -108,6 +109,15 @@ try {
   assert.equal(progressEvents.some((event) => event.phase === "retrying"), true);
   assert.equal(requests.get("/nested/missing.bin"), 2);
 
+  const backups = await manager.listBackups(installPath);
+  assert.equal(backups.length, 1);
+  assert.equal(backups[0].filePath, "/data/outdated.bin");
+  const restored = await manager.restoreBackup(installPath, backups[0].id);
+  assert.equal(restored.ok, true);
+  assert.equal(await fsp.readFile(path.join(installPath, "data", "outdated.bin"), "utf8"), "outdated-old");
+  const repaired = await manager.update({ installPath, baseUrl, paths: ["/data/current.bin"], forceRepair: true });
+  assert.equal(repaired.updated, 1);
+
   await fsp.writeFile(path.join(installPath, "data", "outdated.bin"), "outdated-old");
   permanentFailure = true;
   const failed = await manager.update({ installPath, baseUrl, paths: ["/data/outdated.bin"] });
@@ -126,6 +136,8 @@ try {
         progressEvents: progressEvents.length,
         transientRetries: requests.get("/nested/missing.bin"),
         permanentFailure: failed.failed,
+        backups: backups.length,
+        forcedRepair: repaired.updated,
       },
       null,
       2,

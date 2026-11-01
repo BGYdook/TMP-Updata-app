@@ -54,11 +54,20 @@ jobs:
         env:
           ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
 
+      - name: Create installer checksum
+        shell: pwsh
+        run: |
+          $installer = "release/TMP-Update-${{ steps.version.outputs.version }}-Setup.exe"
+          $checksum = (Get-FileHash -Path $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$checksum  $(Split-Path $installer -Leaf)" | Set-Content "$installer.sha256" -Encoding ascii
+
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: TMP-Update-Windows-${{ steps.version.outputs.version }}
-          path: release/TMP-Update-${{ steps.version.outputs.version }}-Setup.exe
+          path: |
+            release/TMP-Update-${{ steps.version.outputs.version }}-Setup.exe
+            release/TMP-Update-${{ steps.version.outputs.version }}-Setup.exe.sha256
           if-no-files-found: error
 
       - name: Prepare release notes
@@ -79,13 +88,16 @@ jobs:
           name: TMP 更新工具 v${{ steps.version.outputs.version }}
           body_path: release-notes/v${{ steps.version.outputs.version }}.md
           generate_release_notes: true
-          files: release/TMP-Update-${{ steps.version.outputs.version }}-Setup.exe
+          files: |
+            release/TMP-Update-${{ steps.version.outputs.version }}-Setup.exe
+            release/TMP-Update-${{ steps.version.outputs.version }}-Setup.exe.sha256
 
       - name: Prepare CNB attachment
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path cnb-artifacts | Out-Null
           Copy-Item "release/TMP-Update-${{ steps.version.outputs.version }}-Setup.exe" cnb-artifacts/
+          Copy-Item "release/TMP-Update-${{ steps.version.outputs.version }}-Setup.exe.sha256" cnb-artifacts/
 
       - name: Upload CNB attachment artifact
         uses: actions/upload-artifact@v4
@@ -147,7 +159,6 @@ jobs:
           set -euo pipefail
           tag="v${VERSION}"
           api="https://api.cnb.cool/${CNB_REPO_SLUG}/-/releases"
-          asset="cnb-artifacts/TMP-Update-${VERSION}-Setup.exe"
           auth=(-H "Authorization: Bearer ${CNB_TOKEN}" -H "Accept: application/vnd.cnb.api+json")
 
           release_json="$(curl --fail --silent --show-error --location \
@@ -177,22 +188,22 @@ jobs:
             exit 1
           fi
 
-          asset_name="$(basename "${asset}")"
-          asset_size="$(stat -c '%s' "${asset}")"
-          upload_json="$(curl --fail --silent --show-error --location \
-            -X POST "${api}/${release_id}/asset-upload-url" "${auth[@]}" \
-            -H "Content-Type: application/json" \
-            --data "$(jq -cn --arg name "${asset_name}" --argjson size "${asset_size}" \
-              '{asset_name:$name,size:$size,overwrite:true,ttl:0}')")"
-          upload_url="$(jq -r '.upload_url // empty' <<< "${upload_json}")"
-          verify_url="$(jq -r '.verify_url // empty' <<< "${upload_json}")"
-          if [[ -z "${upload_url}" || -z "${verify_url}" ]]; then
-            echo "CNB upload URL response was incomplete." >&2
-            jq . <<< "${upload_json}" >&2 || true
-            exit 1
-          fi
-
-          curl --fail --silent --show-error --location -X PUT --upload-file "${asset}" "${upload_url}"
-          curl --fail --silent --show-error --location -X POST \
-            "${verify_url}?ttl=0" "${auth[@]}"
-          echo "CNB release ${tag} uploaded ${asset_name}."
+          for asset in "cnb-artifacts/TMP-Update-${VERSION}-Setup.exe" "cnb-artifacts/TMP-Update-${VERSION}-Setup.exe.sha256"; do
+            asset_name="$(basename "${asset}")"
+            asset_size="$(stat -c '%s' "${asset}")"
+            upload_json="$(curl --fail --silent --show-error --location \
+              -X POST "${api}/${release_id}/asset-upload-url" "${auth[@]}" \
+              -H "Content-Type: application/json" \
+              --data "$(jq -cn --arg name "${asset_name}" --argjson size "${asset_size}" \
+                '{asset_name:$name,size:$size,overwrite:true,ttl:0}')")"
+            upload_url="$(jq -r '.upload_url // empty' <<< "${upload_json}")"
+            verify_url="$(jq -r '.verify_url // empty' <<< "${upload_json}")"
+            if [[ -z "${upload_url}" || -z "${verify_url}" ]]; then
+              echo "CNB upload URL response was incomplete." >&2
+              jq . <<< "${upload_json}" >&2 || true
+              exit 1
+            fi
+            curl --fail --silent --show-error --location -X PUT --upload-file "${asset}" "${upload_url}"
+            curl --fail --silent --show-error --location -X POST "${verify_url}?ttl=0" "${auth[@]}"
+            echo "CNB release ${tag} uploaded ${asset_name}."
+          done

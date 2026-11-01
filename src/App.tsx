@@ -20,6 +20,8 @@ import {
   Info,
   Loader2,
   Moon,
+  Pause,
+  Play,
   RefreshCw,
   RotateCcw,
   ScanSearch,
@@ -29,6 +31,7 @@ import {
   Square,
   Sun,
   Truck,
+  Trash2,
   X,
   Zap,
 } from "lucide-react";
@@ -67,10 +70,12 @@ const UPDATE_CONCURRENCY = 2;
 const AUTO_DETECT_INTERVAL = 5 * 60_000;
 const GITHUB_REPO_URL = "https://github.com/BGYdook/TMP-Updata-app";
 const CNB_REPO_URL = "https://cnb.cool/BGYdook/TMP-Updata-app";
+const ACTIVITY_STORAGE_KEY = "tmp-sync-activity";
 
 interface ConfirmState {
   paths: string[];
   bytes: number;
+  forceRepair?: boolean;
 }
 
 interface AppUpdateState {
@@ -90,6 +95,10 @@ function isPending(item: SyncItem): boolean {
     isActionable(item) ||
     ["queued", "downloading", "verifying", "installing"].includes(item.state)
   );
+}
+
+function isRepairable(item: SyncItem): boolean {
+  return ["current", "outdated", "missing", "error"].includes(item.state);
 }
 
 function typeAccent(type: number): string {
@@ -237,6 +246,7 @@ export default function App() {
   const [isUpdating, setIsUpdating] = useState(false);
   const [isDetecting, setIsDetecting] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [lastScannedAt, setLastScannedAt] = useState<Date | null>(null);
   const [detailPath, setDetailPath] = useState<string | null>(null);
   const [activityExpanded, setActivityExpanded] = useState(false);
@@ -244,8 +254,18 @@ export default function App() {
   const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(
     null,
   );
-  const [activities, setActivities] = useState<ActivityEntry[]>([]);
+  const [activities, setActivities] = useState<ActivityEntry[]>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(ACTIVITY_STORAGE_KEY) || "[]");
+      return Array.isArray(saved) ? saved.slice(0, 100) : [];
+    } catch {
+      return [];
+    }
+  });
   const [guideOpen, setGuideOpen] = useState(false);
+  const [backupOpen, setBackupOpen] = useState(false);
+  const [backups, setBackups] = useState<DesktopBackup[]>([]);
+  const [networkDiagnostic, setNetworkDiagnostic] = useState<DesktopNetworkDiagnostic | null>(null);
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -277,6 +297,10 @@ export default function App() {
       void window.tmpDesktop.getBackgroundMode().then((result) => setBackgroundMode(result.backgroundMode)).catch(() => undefined);
     }
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem(ACTIVITY_STORAGE_KEY, JSON.stringify(activities.slice(0, 100)));
+  }, [activities]);
 
   const addActivity = useCallback(
     (message: string, level: ActivityEntry["level"] = "info") => {
@@ -312,6 +336,48 @@ export default function App() {
       showNotice(`无法打开链接：${(error as Error).message}`);
     }
   }, [showNotice]);
+
+  const diagnoseNetwork = useCallback(async () => {
+    if (!window.tmpDesktop?.diagnoseNetwork) {
+      showNotice("浏览器模式无法检测桌面网络状态");
+      return;
+    }
+    setNetworkDiagnostic(null);
+    try {
+      const result = await window.tmpDesktop.diagnoseNetwork();
+      setNetworkDiagnostic(result);
+      showNotice(result.message);
+    } catch (error) {
+      const result = { ok: false, message: (error as Error).message };
+      setNetworkDiagnostic(result);
+      showNotice(result.message);
+    }
+  }, [showNotice]);
+
+  const openBackups = useCallback(async () => {
+    if (!window.tmpDesktop?.listBackups || !installPathRef.current) {
+      showNotice("请先连接 TruckersMP 客户端");
+      return;
+    }
+    try {
+      const result = await window.tmpDesktop.listBackups(installPathRef.current);
+      setBackups(result.backups || []);
+      setBackupOpen(true);
+    } catch (error) {
+      showNotice(`读取备份失败：${(error as Error).message}`);
+    }
+  }, [showNotice]);
+
+  const cleanupBackups = useCallback(async () => {
+    if (!window.tmpDesktop?.cleanupBackups || !installPathRef.current) return;
+    const result = await window.tmpDesktop.cleanupBackups(installPathRef.current);
+    if (!result.ok) {
+      showNotice(result.message || "清理备份失败");
+      return;
+    }
+    showNotice(`已清理 ${result.removed || 0} 个旧备份`);
+    await openBackups();
+  }, [openBackups, showNotice]);
 
   const checkAppUpdate = useCallback(async () => {
     if (!window.tmpDesktop?.checkAppUpdate) {
@@ -393,7 +459,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!guideOpen && !confirmState && !detailPath) return;
+    if (!guideOpen && !backupOpen && !confirmState && !detailPath) return;
     const previous = document.activeElement as HTMLElement | null;
     const modal = document.querySelector<HTMLElement>(".modal");
     const selector =
@@ -423,7 +489,7 @@ export default function App() {
       window.removeEventListener("keydown", onTab);
       previous?.focus();
     };
-  }, [guideOpen, confirmState, detailPath]);
+  }, [guideOpen, backupOpen, confirmState, detailPath]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -655,6 +721,18 @@ export default function App() {
     },
     [addActivity],
   );
+
+  const restoreBackup = useCallback(async (backup: DesktopBackup) => {
+    if (!window.tmpDesktop?.restoreBackup || !installPathRef.current) return;
+    const result = await window.tmpDesktop.restoreBackup({ installPath: installPathRef.current, id: backup.id });
+    showNotice(result.message);
+    if (result.ok) {
+      setBackupOpen(false);
+      if (items.length) {
+        await scanNativeClient(items, installPathRef.current, installationSource === "manual" ? "manual" : "auto");
+      }
+    }
+  }, [installationSource, items, scanNativeClient, showNotice]);
 
   const refreshSource = useCallback(
     async (nextBase = baseUrl, directory = directoryRef.current) => {
@@ -993,7 +1071,7 @@ export default function App() {
   };
 
   const requestBatchUpdate = useCallback(
-    async (paths?: string[]) => {
+    async (paths?: string[], forceRepair = false) => {
       if (operationRef.current || isUpdating) return;
       if (
         (window.tmpDesktop && !installPathRef.current) ||
@@ -1016,9 +1094,9 @@ export default function App() {
         return;
       }
       const requestedPaths =
-        paths ?? items.filter(isActionable).map((item) => item.filePath);
+        paths ?? items.filter(forceRepair ? isRepairable : isActionable).map((item) => item.filePath);
       const actionablePaths = requestedPaths.filter((path) =>
-        items.some((item) => item.filePath === path && isActionable(item)),
+        items.some((item) => item.filePath === path && (forceRepair ? isRepairable(item) : isActionable(item))),
       );
       if (!actionablePaths.length) {
         showNotice("没有需要更新的文件");
@@ -1035,7 +1113,7 @@ export default function App() {
       const bytes = items
         .filter((item) => actionablePaths.includes(item.filePath))
         .reduce((sum, item) => sum + item.fileSize, 0);
-      setConfirmState({ paths: actionablePaths, bytes });
+      setConfirmState({ paths: actionablePaths, bytes, forceRepair });
     },
     [
       chooseDirectory,
@@ -1048,7 +1126,7 @@ export default function App() {
   );
 
   const runUpdate = useCallback(
-    async (paths: string[]) => {
+    async (paths: string[], forceRepair = false) => {
       const directory = directoryRef.current;
       const nativeInstallPath = installPathRef.current;
       if (
@@ -1060,11 +1138,12 @@ export default function App() {
         return;
 
       const targets = items.filter(
-        (item) => paths.includes(item.filePath) && isActionable(item),
+        (item) => paths.includes(item.filePath) && (forceRepair ? isRepairable(item) : isActionable(item)),
       );
       if (!targets.length) return;
       operationRef.current = true;
       setIsCancelling(false);
+      setIsPaused(false);
 
       if (window.tmpDesktop && nativeInstallPath) {
         setConfirmState(null);
@@ -1083,7 +1162,7 @@ export default function App() {
         });
         setItems((current) =>
           current.map((item) =>
-            paths.includes(item.filePath) && isActionable(item)
+            paths.includes(item.filePath) && (forceRepair ? isRepairable(item) : isActionable(item))
               ? { ...item, state: "queued", error: undefined, transferred: 0 }
               : item,
           ),
@@ -1094,6 +1173,7 @@ export default function App() {
             installPath: nativeInstallPath,
             baseUrl,
             paths,
+            forceRepair,
           });
           for (const failure of result.errors) {
             addActivity(
@@ -1149,6 +1229,7 @@ export default function App() {
           setIsUpdating(false);
           setUpdateProgress(null);
           setIsCancelling(false);
+          setIsPaused(false);
           operationRef.current = false;
           updateAbortRef.current = null;
         }
@@ -1161,6 +1242,7 @@ export default function App() {
 
       setConfirmState(null);
       setIsUpdating(true);
+      setIsPaused(false);
       setSelected(new Set());
       const controller = new AbortController();
       updateAbortRef.current = controller;
@@ -1198,7 +1280,7 @@ export default function App() {
 
       setItems((current) =>
         current.map((item) =>
-          paths.includes(item.filePath) && isActionable(item)
+          paths.includes(item.filePath) && (forceRepair ? isRepairable(item) : isActionable(item))
             ? { ...item, state: "queued", error: undefined, transferred: 0 }
             : item,
         ),
@@ -1395,6 +1477,7 @@ export default function App() {
         updateAbortRef.current = null;
         setUpdateProgress(null);
         setIsCancelling(false);
+        setIsPaused(false);
         operationRef.current = false;
       }
     },
@@ -1420,6 +1503,19 @@ export default function App() {
     } catch (error) {
       setIsCancelling(false);
       showNotice(`停止失败：${(error as Error).message}`);
+    }
+  };
+
+  const togglePauseUpdate = async () => {
+    if (!window.tmpDesktop || isCancelling) return;
+    try {
+      const result = isPaused
+        ? await window.tmpDesktop.resumeUpdate()
+        : await window.tmpDesktop.pauseUpdate();
+      setIsPaused(result.paused);
+      addActivity(result.paused ? "更新已暂停，临时文件会保留并支持继续" : "更新已继续", "info");
+    } catch (error) {
+      showNotice(`切换暂停状态失败：${(error as Error).message}`);
     }
   };
 
@@ -2415,6 +2511,18 @@ export default function App() {
                         ? "正在停止…"
                         : `已完成 ${updateProgress.completed}/${updateProgress.total}`}
                     </span>
+                    {isDesktop && (
+                      <button
+                        type="button"
+                        className="stop-button"
+                        onClick={() => void togglePauseUpdate()}
+                        disabled={isCancelling}
+                        title={isPaused ? "继续更新" : "暂停更新"}
+                      >
+                        {isPaused ? <Play size={12} fill="currentColor" /> : <Pause size={12} />}
+                        {isPaused ? "继续" : "暂停"}
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="stop-button"
@@ -2436,6 +2544,18 @@ export default function App() {
                       >
                         <RotateCcw size={14} />
                         重试失败文件
+                      </button>
+                    )}
+                    {isDesktop && hasScan && items.length > 0 && (
+                      <button
+                        type="button"
+                        className="footer-update"
+                        disabled={busy}
+                        onClick={() => void requestBatchUpdate(undefined, true)}
+                        title="重新下载并校验当前清单中的所有文件"
+                      >
+                        <ShieldCheck size={14} />
+                        强制修复
                       </button>
                     )}
                     <span>
@@ -2467,9 +2587,14 @@ export default function App() {
             <div className="activity-head">
               <div>
                 <h2>更新记录</h2>
-                <p>保留本次运行的最近操作</p>
+                <p>保留最近操作，关闭软件后仍可查看</p>
               </div>
               <div className="activity-actions">
+                  {isDesktop && hasDirectory && (
+                    <button type="button" onClick={() => void openBackups()} title="查看和恢复更新前备份">
+                      <RotateCcw size={14} /> 备份回滚
+                    </button>
+                  )}
                   <button type="button" onClick={() => void exportDiagnostics()} title="导出本次运行的文件状态和错误记录">
                     <FileDown size={14} /> 导出日志
                   </button>
@@ -2705,6 +2830,13 @@ export default function App() {
                   API 文档
                   <ExternalLink size={13} />
                 </button>
+                {isDesktop && (
+                  <button type="button" onClick={() => void diagnoseNetwork()}>
+                    <Gauge size={15} />
+                    网络诊断
+                    {networkDiagnostic && <span>{networkDiagnostic.ok ? `${networkDiagnostic.latencyMs} ms` : "失败"}</span>}
+                  </button>
+                )}
               </div>
               <div className="app-update-row">
                 <div>
@@ -2807,6 +2939,45 @@ export default function App() {
         </div>
       )}
 
+      {backupOpen && (
+        <div className="modal-layer" role="dialog" aria-modal="true" aria-label="备份与回滚">
+          <button className="modal-backdrop" onClick={() => setBackupOpen(false)} aria-label="关闭" />
+          <div className="modal backup-modal">
+            <div className="modal-head">
+              <div className="modal-icon"><RotateCcw size={20} /></div>
+              <div>
+                <h3>备份与回滚</h3>
+                <p>更新成功后保留最近三次文件备份。</p>
+              </div>
+              <button type="button" className="modal-close" onClick={() => setBackupOpen(false)}><X size={18} /></button>
+            </div>
+            <div className="backup-toolbar">
+              <span>{backups.length ? `共有 ${backups.length} 个备份` : "暂无可用备份"}</span>
+              <button type="button" className="text-button" onClick={() => void cleanupBackups()} disabled={!backups.length}>
+                <Trash2 size={14} /> 清理旧备份
+              </button>
+            </div>
+            {backups.length ? (
+              <div className="backup-list">
+                {backups.map((backup) => (
+                  <div className="backup-entry" key={backup.id}>
+                    <div>
+                      <strong>{backup.filePath}</strong>
+                      <span>{formatBytes(backup.size)} · {new Date(backup.createdAt).toLocaleString()}</span>
+                    </div>
+                    <button type="button" className="button secondary" onClick={() => void restoreBackup(backup)} disabled={busy}>
+                      <RotateCcw size={14} /> 恢复
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="empty-activity"><strong>还没有备份</strong><span>下一次成功更新后会自动保留旧文件。</span></div>
+            )}
+          </div>
+        </div>
+      )}
+
       {confirmState && (
         <div
           className="modal-layer"
@@ -2823,10 +2994,12 @@ export default function App() {
             <div className="confirm-symbol">
               <CloudDownload size={25} />
             </div>
-            <h3>准备更新 {confirmState.paths.length} 个文件</h3>
+            <h3>{confirmState.forceRepair ? "准备强制修复" : "准备更新"} {confirmState.paths.length} 个文件</h3>
             <p className="confirm-description">
-              将下载 {formatBytes(confirmState.bytes)}{" "}
-              数据，并用校验通过的版本覆盖本地同名文件。
+              将下载 {formatBytes(confirmState.bytes)} 数据，
+              {confirmState.forceRepair
+                ? "重新校验并覆盖清单中的文件。"
+                : "并用校验通过的版本覆盖本地同名文件。"}
             </p>
             <div className="confirm-list">
               {items
@@ -2856,7 +3029,7 @@ export default function App() {
               <button
                 type="button"
                 className="button primary"
-                onClick={() => runUpdate(confirmState.paths)}
+                onClick={() => runUpdate(confirmState.paths, confirmState.forceRepair)}
               >
                 <Zap size={16} />
                 开始更新

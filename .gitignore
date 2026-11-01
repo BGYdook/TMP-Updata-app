@@ -7,3 +7,4 @@ Thumbs.db
 artifacts/
 release/
 electron/*.release.cjs
+.tmp-update-backups/
