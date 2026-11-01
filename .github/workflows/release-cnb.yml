@@ -116,10 +116,11 @@ jobs:
           remote_commit="$(git ls-remote cnb "refs/tags/${tag}^{}" "refs/tags/${tag}" | tail -n 1 | awk '{print $1}')"
           if [[ -n "${remote_commit}" ]]; then
             if [[ "${remote_commit}" != "${local_commit}" ]]; then
-              echo "CNB tag ${tag} already exists but points to a different commit." >&2
-              exit 1
+              echo "CNB tag ${tag} points to ${remote_commit}; updating it to ${local_commit}."
+              git push --force cnb "refs/tags/${tag}:refs/tags/${tag}"
+            else
+              echo "CNB tag ${tag} already points to the current commit; continuing."
             fi
-            echo "CNB tag ${tag} already points to the current commit; continuing."
           else
             git push cnb "refs/tags/${tag}:refs/tags/${tag}"
           fi
