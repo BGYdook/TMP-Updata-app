@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
+import fsp from "node:fs/promises";
 import { chromium } from "playwright-core";
+
+const packageJson = JSON.parse(await fsp.readFile(new URL("../package.json", import.meta.url), "utf8"));
+const APP_VERSION = packageJson.version;
+const UPDATE_VERSION = APP_VERSION.replace(/(\d+)$/, (_, patch) => String(Number(patch) + 1));
 
 const files = [
   ["/data/current.bin", "current"],
@@ -36,7 +41,7 @@ try {
     manifestRequests += 1;
     return route.fulfill({ json: { code: 200, msg: "ok", data: manifest } });
   });
-  await page.addInitScript((initialFiles) => {
+  await page.addInitScript(({ initialFiles, updateVersion }) => {
     const test = (window.dashboardTest = {
       files: initialFiles,
       scans: 0,
@@ -129,15 +134,15 @@ try {
         return {
           ok: true,
           available: true,
-          currentVersion: "1.2.2",
-          latestVersion: "1.3.1",
-          releaseUrl: "https://cnb.cool/BGYdook/TMP-Updata-app/-/releases/tag/v1.3.1",
-          message: "发现新版本 v1.3.1",
+          currentVersion: "0.0.0",
+          latestVersion: updateVersion,
+          releaseUrl: `https://cnb.cool/BGYdook/TMP-Updata-app/-/releases/tag/v${updateVersion}`,
+          message: `发现新版本 v${updateVersion}`,
         };
       },
       async installAppUpdate() {
         test.appUpdated = true;
-        return { ok: true, message: "已下载 v1.3.1 安装包，正在启动安装程序" };
+        return { ok: true, message: `已下载 v${updateVersion} 安装包，正在启动安装程序` };
       },
       async openExternal(url) {
         test.opened = url;
@@ -148,7 +153,7 @@ try {
         return () => {};
       },
     };
-  }, files);
+  }, { initialFiles: files, updateVersion: UPDATE_VERSION });
 
   await page.goto("http://127.0.0.1:5173/", { waitUntil: "networkidle" });
   await page.waitForFunction(() =>
@@ -188,9 +193,13 @@ try {
   await page.getByRole("dialog", { name: "关于与使用说明" }).getByText("作者：BGYdook").waitFor();
   await page.getByRole("dialog", { name: "关于与使用说明" }).getByRole("button", { name: "API 文档" }).click();
   assert.equal(await page.evaluate(() => window.dashboardTest.opened), "https://tmplistoss.bgydook.cn/docs/");
-  await page.getByRole("dialog", { name: "关于与使用说明" }).getByRole("button", { name: "检查更新" }).click();
-  await page.getByRole("dialog", { name: "关于与使用说明" }).getByRole("button", { name: "安装 v1.3.1" }).waitFor();
-  await page.getByRole("dialog", { name: "关于与使用说明" }).getByRole("button", { name: "安装 v1.3.1" }).click();
+  const aboutDialog = page.getByRole("dialog", { name: "关于与使用说明" });
+  const checkButton = aboutDialog.getByRole("button", { name: "检查更新", exact: true });
+  if (await checkButton.count()) await checkButton.click();
+  const installButton = aboutDialog.getByRole("button", { name: /安装 v\d+\.\d+\.\d+/ });
+  await installButton.waitFor();
+  assert.match(await installButton.textContent(), new RegExp(`v${UPDATE_VERSION}`));
+  await installButton.click();
   assert.equal(await page.evaluate(() => window.dashboardTest.appUpdated), true);
   await page.keyboard.press("Escape");
   assert.equal(await page.locator("tbody tr").count(), 4);

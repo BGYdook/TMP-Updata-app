@@ -74,7 +74,7 @@ npm run desktop:build
 项目已经提供两个 GitHub Actions：
 
 - `.github/workflows/sync-cnb.yml`：每次向 GitHub 推送分支时，把同名分支推送到 CNB。
-- `.github/workflows/release-cnb.yml`：推送 `v1.3.1` 这类版本标签时，构建 Windows 安装包，同时发布 GitHub Release 和 CNB Release 附件。CNB 发布步骤使用 Release API 创建版本并上传附件，重复运行会复用已有版本。
+- `.github/workflows/release-cnb.yml`：推送 `vX.Y.Z` 版本标签时，构建 Windows 安装包，同时发布 GitHub Release 和 CNB Release 附件。CNB 发布步骤使用 Release API 创建版本并上传附件，重复运行会复用已有版本。
 
 首次使用时，在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 中配置：
 
@@ -89,10 +89,11 @@ CNB 仓库需要提前创建，并确保这个令牌可以推送代码和创建/
 发布新版本的流程：
 
 ```powershell
-# 先把 package.json 的 version 改成新版本
+# 用 npm version 同时更新 package.json 和 package-lock.json；前端、桌面程序和烟测会自动读取它
+npm version 1.3.3 --no-git-tag-version
 git add package.json package-lock.json
-git commit -m "release: v1.3.1"
-git tag v1.3.1
+git commit -m "release: v1.3.3"
+git tag v1.3.3
 git push origin master --tags
 ```
 

@@ -6,6 +6,8 @@ import { createRequire } from "node:module";
 import { _electron as electron } from "playwright-core";
 
 const root = await fsp.mkdtemp(path.join(os.tmpdir(), "tmp-sync-desktop-"));
+const packageJson = JSON.parse(await fsp.readFile(new URL("../package.json", import.meta.url), "utf8"));
+const APP_VERSION = packageJson.version;
 const output = path.join(root, "diagnostics.json");
 const require = createRequire(import.meta.url);
 const executablePath = require("electron");
@@ -33,7 +35,7 @@ try {
   }));
   assert.equal(exported.ok, true);
   const diagnostic = JSON.parse(await fsp.readFile(output, "utf8"));
-  assert.equal(diagnostic.appVersion, "1.3.1");
+  assert.equal(diagnostic.appVersion, APP_VERSION);
   assert.equal(diagnostic.files[0].error, "test failure");
 
   await desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());

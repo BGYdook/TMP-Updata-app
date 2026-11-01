@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing version tag, for example v1.3.1"
+        description: "Existing version tag, for example vX.Y.Z"
         required: true
         type: string
 
@@ -60,6 +60,17 @@ jobs:
           name: TMP-Update-Windows-${{ steps.version.outputs.version }}
           path: release/TMP-Update-${{ steps.version.outputs.version }}-Setup.exe
           if-no-files-found: error
+
+      - name: Prepare release notes
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $notes = "release-notes/v$version.md"
+          if (-not (Test-Path $notes)) {
+            New-Item -ItemType Directory -Force -Path release-notes | Out-Null
+            $commits = @(git log -5 --pretty=format:'- %s')
+            @("# TMP File Mirror v$version", "", "## 更新内容", "", $commits) | Set-Content -Path $notes -Encoding utf8
+          }
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -146,6 +157,9 @@ jobs:
           if [[ -z "${release_id}" ]]; then
             commit_sha="$(git rev-list -n 1 "refs/tags/${tag}")"
             release_notes="release-notes/v${VERSION}.md"
+            if [[ ! -f "${release_notes}" ]]; then
+              printf '# TMP File Mirror v%s\n\n## 更新内容\n\n%s\n' "${VERSION}" "$(git log -5 --pretty=format:'- %s')" > "${release_notes}"
+            fi
             release_json="$(curl --fail --silent --show-error --location \
               -X POST "${api}" "${auth[@]}" -H "Content-Type: application/json" \
               --data "$(jq -cn \
