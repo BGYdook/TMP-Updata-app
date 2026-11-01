@@ -72,7 +72,7 @@ npm run desktop:build
 项目已经提供两个 GitHub Actions：
 
 - `.github/workflows/sync-cnb.yml`：每次向 GitHub 推送分支时，把同名分支推送到 CNB。
-- `.github/workflows/release-cnb.yml`：推送 `v1.3.0` 这类版本标签时，构建 Windows 安装包，同时发布 GitHub Release 和 CNB Release 附件。
+- `.github/workflows/release-cnb.yml`：推送 `v1.3.0` 这类版本标签时，构建 Windows 安装包，同时发布 GitHub Release 和 CNB Release 附件。CNB 发布步骤使用 Release API 创建版本并上传附件，重复运行会复用已有版本。
 
 首次使用时，在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 中配置：
 

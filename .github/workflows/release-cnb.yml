@@ -124,25 +124,7 @@ jobs:
             git push cnb "refs/tags/${tag}:refs/tags/${tag}"
           fi
 
-      - name: Wait for CNB release page
-        shell: bash
-        env:
-          CNB_REPO_SLUG: ${{ vars.CNB_REPO_SLUG }}
-          VERSION: ${{ needs.build.outputs.version }}
-        run: |
-          set -euo pipefail
-          url="https://cnb.cool/${CNB_REPO_SLUG}/-/releases/tag/v${VERSION}"
-          for attempt in {1..20}; do
-            page="$(curl --fail --silent --show-error --location "$url" || true)"
-            if grep -q "Download source code" <<< "$page"; then
-              exit 0
-            fi
-            sleep 15
-          done
-          echo "CNB release page was not ready: $url" >&2
-          exit 1
-
-      - name: Upload installer to CNB release
+      - name: Create CNB release and upload installer
         shell: bash
         env:
           CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
@@ -150,13 +132,49 @@ jobs:
           VERSION: ${{ needs.build.outputs.version }}
         run: |
           set -euo pipefail
-          docker run --rm \
-            -e CNB_TOKEN \
-            -e CNB_API_ENDPOINT=https://api.cnb.cool \
-            -e CNB_WEB_ENDPOINT=https://cnb.cool \
-            -e CNB_REPO_SLUG \
-            -e PLUGIN_TAG="v${VERSION}" \
-            -e PLUGIN_ATTACHMENTS="cnb-artifacts/**/*" \
-            -v "${GITHUB_WORKSPACE}:/work" \
-            -w /work \
-            cnbcool/attachments:latest
+          tag="v${VERSION}"
+          api="https://api.cnb.cool/${CNB_REPO_SLUG}/-/releases"
+          asset="cnb-artifacts/TMP-Update-${VERSION}-Setup.exe"
+          auth=(-H "Authorization: Bearer ${CNB_TOKEN}" -H "Accept: application/vnd.cnb.api+json")
+
+          release_json="$(curl --fail --silent --show-error --location \
+            "${api}/tags/${tag}" "${auth[@]}" 2>/dev/null || true)"
+          release_id="$(jq -r '.id // empty' <<< "${release_json}")"
+
+          if [[ -z "${release_id}" ]]; then
+            commit_sha="$(git rev-list -n 1 "refs/tags/${tag}")"
+            release_json="$(curl --fail --silent --show-error --location \
+              -X POST "${api}" "${auth[@]}" -H "Content-Type: application/json" \
+              --data "$(jq -cn \
+                --arg tag "${tag}" \
+                --arg target "${commit_sha}" \
+                --arg name "TMP 更新工具 v${VERSION}" \
+                '{tag_name:$tag,target_commitish:$target,name:$name,body:"Windows 安装包",draft:false,prerelease:false,make_latest:"true"}')")"
+            release_id="$(jq -r '.id // empty' <<< "${release_json}")"
+          fi
+
+          if [[ -z "${release_id}" ]]; then
+            echo "CNB release response did not include a release id." >&2
+            jq . <<< "${release_json}" >&2 || true
+            exit 1
+          fi
+
+          asset_name="$(basename "${asset}")"
+          asset_size="$(stat -c '%s' "${asset}")"
+          upload_json="$(curl --fail --silent --show-error --location \
+            -X POST "${api}/${release_id}/asset-upload-url" "${auth[@]}" \
+            -H "Content-Type: application/json" \
+            --data "$(jq -cn --arg name "${asset_name}" --argjson size "${asset_size}" \
+              '{asset_name:$name,size:$size,overwrite:true,ttl:0}')")"
+          upload_url="$(jq -r '.upload_url // empty' <<< "${upload_json}")"
+          verify_url="$(jq -r '.verify_url // empty' <<< "${upload_json}")"
+          if [[ -z "${upload_url}" || -z "${verify_url}" ]]; then
+            echo "CNB upload URL response was incomplete." >&2
+            jq . <<< "${upload_json}" >&2 || true
+            exit 1
+          fi
+
+          curl --fail --silent --show-error --location -X PUT --upload-file "${asset}" "${upload_url}"
+          curl --fail --silent --show-error --location -X POST \
+            "${verify_url}?ttl=0" "${auth[@]}"
+          echo "CNB release ${tag} uploaded ${asset_name}."
