@@ -508,6 +508,18 @@ ipcMain.handle("tmp:install-app-update", async (event) => {
     if (compareAppVersions(latest.version, app.getVersion()) <= 0) {
       return { ok: false, message: "当前已是最新版本" };
     }
+    if (!event.sender.isDestroyed()) {
+      event.sender.send("tmp:app-update-progress", {
+        downloaded: 0,
+        total: 0,
+        percent: 0,
+        speed: 0,
+        etaSeconds: null,
+        phase: "connecting",
+        message: "正在连接 CNB 下载服务器…",
+        stalled: false,
+      });
+    }
     const response = await net.fetch(latest.downloadUrl, {
       headers: { Accept: "application/octet-stream", "User-Agent": "TMP-File-Mirror-Desktop" },
       cache: "no-cache",
@@ -525,12 +537,39 @@ ipcMain.handle("tmp:install-app-update", async (event) => {
     const installer = path.join(updateDirectory, latest.assetName);
     const handle = await fsp.open(temporary, "w");
     let downloaded = 0;
+    const startedAt = Date.now();
+    let lastProgressAt = 0;
+    let lastChunkAt = Date.now();
+    let progressTimer = null;
+    const sendProgress = (phase = "downloading", message = "正在下载 CNB 安装包…") => {
+      const elapsed = Math.max(1, Date.now() - startedAt) / 1000;
+      const speed = downloaded / elapsed;
+      const stalled = phase === "downloading" && downloaded < contentLength && Date.now() - lastChunkAt >= 5000;
+      if (event.sender.isDestroyed()) return;
+      event.sender.send("tmp:app-update-progress", {
+        downloaded,
+        total: contentLength,
+        percent: contentLength > 0 ? Math.min(100, (downloaded / contentLength) * 100) : 0,
+        speed,
+        etaSeconds: speed > 0 && contentLength > downloaded ? Math.ceil((contentLength - downloaded) / speed) : null,
+        phase,
+        message: stalled ? "网络暂时没有返回数据，仍在等待…" : message,
+        stalled,
+      });
+    };
+    sendProgress();
+    progressTimer = setInterval(() => sendProgress(), 1000);
     try {
       for await (const chunk of response.body) {
         const bytes = Buffer.from(chunk);
         downloaded += bytes.length;
+        lastChunkAt = Date.now();
         if (downloaded > 600 * 1024 * 1024) throw new Error("更新安装包超过 600 MB 安全上限");
         await handle.write(bytes);
+        if (Date.now() - lastProgressAt >= 100 || downloaded === contentLength) {
+          lastProgressAt = Date.now();
+          sendProgress();
+        }
       }
       await handle.close();
       await fsp.rm(installer, { force: true });
@@ -539,7 +578,10 @@ ipcMain.handle("tmp:install-app-update", async (event) => {
       await handle.close().catch(() => undefined);
       await fsp.rm(temporary, { force: true }).catch(() => undefined);
       throw error;
+    } finally {
+      if (progressTimer) clearInterval(progressTimer);
     }
+    sendProgress("done", "安装包下载完成，正在启动安装程序…");
     const launchError = await shell.openPath(installer);
     if (launchError) throw new Error(`无法启动更新安装包：${launchError}`);
     quitting = true;

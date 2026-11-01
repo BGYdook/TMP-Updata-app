@@ -2295,6 +2295,53 @@ tbody tr:last-child td {
   white-space: nowrap;
 }
 
+.app-update-progress {
+  display: flex;
+  min-width: 260px;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.app-update-progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.app-update-progress-track {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--line);
+}
+
+.app-update-progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--orange);
+  transition: width 160ms ease;
+}
+
+.app-update-progress-track.indeterminate span {
+  width: 35% !important;
+  background: linear-gradient(90deg, transparent, var(--orange), transparent);
+  animation: app-update-progress-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes app-update-progress-slide {
+  from { transform: translateX(-120%); }
+  to { transform: translateX(320%); }
+}
+
+.app-update-progress small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .guide-divider {
   display: flex;
   align-items: center;

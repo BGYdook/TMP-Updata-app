@@ -78,6 +78,7 @@ interface AppUpdateState {
   latestVersion?: string;
   releaseUrl?: string;
   message?: string;
+  progress?: DesktopAppUpdateProgress;
 }
 
 function isActionable(item: SyncItem): boolean {
@@ -334,7 +335,7 @@ export default function App() {
 
   const installAppUpdate = useCallback(async () => {
     if (!window.tmpDesktop?.installAppUpdate) return;
-    setAppUpdate((current) => ({ ...current, status: "installing", message: "正在下载 CNB 安装包…" }));
+    setAppUpdate((current) => ({ ...current, status: "installing", message: "正在下载 CNB 安装包…", progress: undefined }));
     try {
       const result = await window.tmpDesktop.installAppUpdate();
       if (!result.ok) {
@@ -353,6 +354,13 @@ export default function App() {
     const timer = window.setTimeout(() => void checkAppUpdate(), 2500);
     return () => window.clearTimeout(timer);
   }, [checkAppUpdate]);
+
+  useEffect(() => {
+    if (!window.tmpDesktop?.onAppUpdateProgress) return;
+    return window.tmpDesktop.onAppUpdateProgress((progress) => {
+      setAppUpdate((current) => ({ ...current, status: "installing", message: progress.message, progress }));
+    });
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -2704,6 +2712,31 @@ export default function App() {
                   <span>
                     {appUpdate.message || "更新源：CNB Release"}
                   </span>
+                  {appUpdate.status === "installing" && appUpdate.progress && (
+                    <div className="app-update-progress" aria-label="软件更新下载进度">
+                      <div className="app-update-progress-head">
+                        <span>{appUpdate.progress.percent.toFixed(1)}%</span>
+                        <span>
+                          {formatBytes(appUpdate.progress.downloaded)} / {appUpdate.progress.total ? formatBytes(appUpdate.progress.total) : "计算中"}
+                        </span>
+                      </div>
+                      <div className={`app-update-progress-track${appUpdate.progress.total ? "" : " indeterminate"}`}>
+                        <span style={{ width: `${Math.min(100, appUpdate.progress.percent)}%` }} />
+                      </div>
+                      <small>
+                        {appUpdate.progress.phase === "connecting"
+                          ? "正在连接下载服务器"
+                          : `${formatBytes(appUpdate.progress.speed)}/s`}
+                        {appUpdate.progress.phase === "connecting"
+                          ? ""
+                          : appUpdate.progress.stalled
+                          ? " · 网络等待中"
+                          : appUpdate.progress.etaSeconds == null
+                            ? " · 正在计算剩余时间"
+                            : ` · 剩余 ${formatEta(appUpdate.progress.etaSeconds)}`}
+                      </small>
+                    </div>
+                  )}
                 </div>
                 {appUpdate.status === "available" ? (
                   <button type="button" className="button primary" onClick={() => void installAppUpdate()}>
