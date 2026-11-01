@@ -93,8 +93,12 @@ try {
   await page.screenshot({ path: "artifacts/update-result.png" });
   await page.getByPlaceholder("搜索文件路径").fill("");
 
-  await page.getByRole("button", { name: /智能更新/ }).click();
-  await page.getByText("准备更新 174 个文件").waitFor({ state: "visible" });
+  const smartUpdateButton = page.getByRole("button", { name: /智能更新/ });
+  const smartUpdateLabel = await smartUpdateButton.textContent();
+  const pendingCount = smartUpdateLabel?.match(/\d+/)?.[0];
+  if (!pendingCount) throw new Error(`Unable to read pending count from ${smartUpdateLabel}`);
+  await smartUpdateButton.click();
+  await page.getByText(`准备更新 ${pendingCount} 个文件`).waitFor({ state: "visible" });
   await page.getByRole("button", { name: "稍后更新" }).click();
 
   await page.getByPlaceholder("搜索文件路径").fill("client2");

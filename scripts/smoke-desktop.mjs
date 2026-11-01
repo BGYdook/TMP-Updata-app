@@ -33,7 +33,7 @@ try {
   }));
   assert.equal(exported.ok, true);
   const diagnostic = JSON.parse(await fsp.readFile(output, "utf8"));
-  assert.equal(diagnostic.appVersion, "1.2.0");
+  assert.equal(diagnostic.appVersion, "1.2.1");
   assert.equal(diagnostic.files[0].error, "test failure");
 
   await desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());

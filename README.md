@@ -16,6 +16,7 @@
 - 每 5 分钟自动重新检测客户端目录和文件差异，可随时关闭
 - 可驻留系统托盘继续检测；新更新或后台更新结果通过系统通知提醒
 - 导出包含版本、文件状态、错误和本次操作记录的 JSON 诊断日志
+- 关于界面显示作者、GitHub/CNB 仓库，并从 CNB Release 检查和安装软件更新
 - 浅色 / 深色主题切换，首次启动跟随系统并记住用户选择
 - 保留仪表盘布局，目录卡片集中显示连接、检查和更新状态
 - 按待更新、已是最新、检查异常筛选，待处理文件优先显示
@@ -71,7 +72,7 @@ npm run desktop:build
 项目已经提供两个 GitHub Actions：
 
 - `.github/workflows/sync-cnb.yml`：每次向 GitHub 推送分支时，把同名分支推送到 CNB。
-- `.github/workflows/release-cnb.yml`：推送 `v1.2.0` 这类版本标签时，构建 Windows 安装包，同时发布 GitHub Release 和 CNB Release 附件。
+- `.github/workflows/release-cnb.yml`：推送 `v1.2.1` 这类版本标签时，构建 Windows 安装包，同时发布 GitHub Release 和 CNB Release 附件。
 
 首次使用时，在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 中配置：
 
@@ -95,6 +96,8 @@ git push origin master --tags
 
 如果你的 GitHub 默认分支是 `main`，把上面的 `master` 换成 `main`。推送完成后，在 GitHub Actions 页面可以看到 `Sync to CNB` 和 `Build and publish release to GitHub and CNB` 两个任务。工作流会检查标签版本是否和 `package.json` 一致，不一致时会停止发布，避免 GitHub 与 CNB 出现不同版本。
 
+桌面版启动后会静默检查 CNB Release。发现新版本时，在“关于与使用说明”中点击“安装”即可下载 CNB 安装包并启动安装程序。安装程序启动后应用会退出，软件更新需要重启完成；文件更新和软件更新使用不同的流程。
+
 应用图标为橙色卡车与更新箭头，包含 SVG 源文件、512 px PNG，以及 16–256 px 共 10 个尺寸的 ICO，位于 `public/app-icon.*`。Windows 程序、安装包和浏览器均已接入。修改 SVG 后可用 `npm run build:icons` 重新生成（需要 Chrome / Edge，或设置 `CHROME_PATH`）。
 
 默认使用国内镜像下载 electron-builder 的 Windows 打包工具；如需切换镜像，可设置 `ELECTRON_BUILDER_BINARIES_MIRROR` 环境变量。
@@ -115,9 +118,9 @@ npm run smoke:dashboard
 
 ## 更新前
 
-建议先退出 TMP 客户端，避免 Windows 文件锁导致覆盖失败。所有下载地址都会带上 `v={md5}` 参数，并在替换原文件前完成 MD5 校验。
+建议先退出欧卡 2 或美卡，避免 Windows 文件锁导致覆盖失败。TruckersMP 启动器可以保持打开。所有下载地址都会带上 `v={md5}` 参数，并在替换原文件前完成 MD5 校验。
 
-桌面版在更新前还会检查 TruckersMP、欧卡 2 和美卡进程是否仍在运行。
+桌面版在更新前会检查欧卡 2 和美卡进程是否仍在运行；TruckersMP 启动器可以保持打开。
 
 ## 浏览器支持
 

@@ -42,6 +42,15 @@ declare global {
     message: string;
   }
 
+  interface DesktopAppUpdateResult {
+    ok: boolean;
+    available: boolean;
+    currentVersion: string;
+    latestVersion: string;
+    releaseUrl: string;
+    message: string;
+  }
+
   interface TmpDesktopApi {
     isDesktop: true;
     detectInstallPath(): Promise<DesktopDetectionResult>;
@@ -66,6 +75,9 @@ declare global {
       activities: Array<{ time: string; level: string; message: string }>;
     }): Promise<{ ok: boolean; cancelled?: boolean }>;
     reportCheckError(reason: string): Promise<void>;
+    checkAppUpdate(): Promise<DesktopAppUpdateResult>;
+    installAppUpdate(): Promise<{ ok: boolean; message: string }>;
+    openExternal(url: string): Promise<{ ok: boolean }>;
     onProgress(callback: (progress: DesktopUpdateProgress) => void): () => void;
   }
 

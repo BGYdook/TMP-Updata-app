@@ -21,6 +21,10 @@ const { TmpUpdateManager } = require(
 
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || "http://127.0.0.1:5173";
 const TMP_API_BASE = "https://tmplistoss.bgydook.cn";
+const CNB_REPO_SLUG = "BGYdook/TMP-Updata-app";
+const CNB_RELEASES_URL = `https://cnb.cool/${CNB_REPO_SLUG}/-/releases/latest`;
+const CNB_RELEASE_ORIGIN = "https://cnb.cool";
+const CNB_CDN_ORIGIN = "https://cnb.cdn-go.cn";
 const APP_ORIGIN = "tmp-app://bundle";
 protocol.registerSchemesAsPrivileged([
   {
@@ -43,6 +47,7 @@ let quitting = false;
 let backgroundMode = true;
 let lastPendingSignature = "";
 let lastCheckError = "";
+let pendingAppUpdate = null;
 let activeInstallPath = "";
 const trustedInstallPaths = new Set();
 
@@ -79,6 +84,46 @@ function setupTray() {
   ]));
   tray.on("double-click", showWindow);
   tray.on("click", showWindow);
+}
+
+function parseAppVersion(value) {
+  const match = String(value || "").trim().replace(/^v/i, "").match(/^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/);
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+}
+
+function compareAppVersions(left, right) {
+  const a = parseAppVersion(left) || [0, 0, 0];
+  const b = parseAppVersion(right) || [0, 0, 0];
+  for (let index = 0; index < 3; index += 1) {
+    if (a[index] !== b[index]) return a[index] - b[index];
+  }
+  return 0;
+}
+
+async function getLatestCnbRelease() {
+  const response = await net.fetch(CNB_RELEASES_URL, {
+    headers: { Accept: "text/html", "User-Agent": "TMP-Sync-Desktop" },
+    cache: "no-cache",
+  });
+  if (!response.ok) throw new Error(`获取 CNB 更新信息失败（HTTP ${response.status}）`);
+  const html = await response.text();
+  const tags = [
+    ...[...html.matchAll(/\/-\/releases\/tag\/(v\d+\.\d+\.\d+(?:[-.][A-Za-z0-9]+)*)/g)].map((match) => match[1]),
+    ...[...html.matchAll(/\\?"tag\\?",\\?"(v\d+\.\d+\.\d+(?:[-.][A-Za-z0-9]+)*)/g)].map((match) => match[1]),
+  ]
+    .filter((tag, index, values) => values.indexOf(tag) === index)
+    .sort((left, right) => compareAppVersions(right, left));
+  const tag = tags[0];
+  if (!tag) throw new Error("CNB 暂无可用的版本发布");
+  const version = tag.slice(1);
+  const assetName = `TMP-Update-${version}-Setup.exe`;
+  return {
+    version,
+    tag,
+    assetName,
+    releaseUrl: `https://cnb.cool/${CNB_REPO_SLUG}/-/releases/tag/${tag}`,
+    downloadUrl: `https://cnb.cool/${CNB_REPO_SLUG}/-/releases/download/${tag}/${assetName}`,
+  };
 }
 
 function getTmpUpdate() {
@@ -424,6 +469,103 @@ ipcMain.handle("tmp:export-diagnostics", async (event, snapshot) => {
   return { ok: true };
 });
 
+ipcMain.handle("tmp:check-app-update", async (event) => {
+  assertTrustedSender(event);
+  try {
+    const latest = await getLatestCnbRelease();
+    const currentVersion = app.getVersion();
+    const available = compareAppVersions(latest.version, currentVersion) > 0;
+    pendingAppUpdate = available ? latest : null;
+    return {
+      ok: true,
+      available,
+      currentVersion,
+      latestVersion: latest.version,
+      releaseUrl: latest.releaseUrl,
+      message: available ? `发现新版本 v${latest.version}` : "当前已是最新版本",
+    };
+  } catch (error) {
+    pendingAppUpdate = null;
+    return {
+      ok: false,
+      available: false,
+      currentVersion: app.getVersion(),
+      latestVersion: "",
+      releaseUrl: `https://cnb.cool/${CNB_REPO_SLUG}/-/releases/latest`,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+});
+
+ipcMain.handle("tmp:install-app-update", async (event) => {
+  assertTrustedSender(event);
+  if (getTmpUpdate().updating) {
+    return { ok: false, message: "请先完成当前文件更新" };
+  }
+  try {
+    const latest = pendingAppUpdate || await getLatestCnbRelease();
+    if (compareAppVersions(latest.version, app.getVersion()) <= 0) {
+      return { ok: false, message: "当前已是最新版本" };
+    }
+    const response = await net.fetch(latest.downloadUrl, {
+      headers: { Accept: "application/octet-stream", "User-Agent": "TMP-Sync-Desktop" },
+      cache: "no-cache",
+    });
+    if (!response.ok || !response.body) throw new Error(`下载更新安装包失败（HTTP ${response.status}）`);
+    const finalUrl = new URL(response.url || latest.downloadUrl);
+    if (![CNB_RELEASE_ORIGIN, CNB_CDN_ORIGIN].includes(finalUrl.origin)) {
+      throw new Error("更新安装包被重定向到非受信任地址");
+    }
+    const contentLength = Number(response.headers.get("content-length")) || 0;
+    if (contentLength > 600 * 1024 * 1024) throw new Error("更新安装包超过 600 MB 安全上限");
+    const updateDirectory = path.join(app.getPath("userData"), "updates");
+    await fsp.mkdir(updateDirectory, { recursive: true });
+    const temporary = path.join(updateDirectory, `.${latest.assetName}.part`);
+    const installer = path.join(updateDirectory, latest.assetName);
+    const handle = await fsp.open(temporary, "w");
+    let downloaded = 0;
+    try {
+      for await (const chunk of response.body) {
+        const bytes = Buffer.from(chunk);
+        downloaded += bytes.length;
+        if (downloaded > 600 * 1024 * 1024) throw new Error("更新安装包超过 600 MB 安全上限");
+        await handle.write(bytes);
+      }
+      await handle.close();
+      await fsp.rm(installer, { force: true });
+      await fsp.rename(temporary, installer);
+    } catch (error) {
+      await handle.close().catch(() => undefined);
+      await fsp.rm(temporary, { force: true }).catch(() => undefined);
+      throw error;
+    }
+    const launchError = await shell.openPath(installer);
+    if (launchError) throw new Error(`无法启动更新安装包：${launchError}`);
+    quitting = true;
+    setTimeout(() => app.quit(), 250);
+    return { ok: true, message: `已下载 v${latest.version} 安装包，正在启动安装程序` };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+ipcMain.handle("tmp:open-external", async (event, value) => {
+  assertTrustedSender(event);
+  const allowed = new Set([
+    "https://github.com/BGYdook/TMP-Updata-app",
+    "https://cnb.cool/BGYdook/TMP-Updata-app",
+  ]);
+  let target;
+  try {
+    target = new URL(String(value || "")).toString().replace(/\/+$/, "");
+  } catch {
+    throw new Error("外部链接无效");
+  }
+  if (!allowed.has(target)) throw new Error("外部链接不在允许范围内");
+  await shell.openExternal(target);
+  return { ok: true };
+});
+
 if (gotLock) {
   app.whenReady().then(async () => {
     session.defaultSession.setPermissionRequestHandler(
@@ -440,6 +582,8 @@ if (gotLock) {
           const allowed =
             target.protocol === "tmp-app:" ||
             target.origin === TMP_API_BASE ||
+            target.origin === CNB_RELEASE_ORIGIN ||
+            target.origin === CNB_CDN_ORIGIN ||
             (!app.isPackaged && target.origin === new URL(DEV_URL).origin);
           callback({ cancel: !allowed });
         } catch {

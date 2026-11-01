@@ -18,6 +18,9 @@ const api = Object.freeze({
   setBackgroundMode: (enabled) => ipcRenderer.invoke("tmp:set-background", enabled === true),
   exportDiagnostics: (snapshot) => ipcRenderer.invoke("tmp:export-diagnostics", snapshot),
   reportCheckError: (reason) => ipcRenderer.invoke("tmp:report-check-error", String(reason || "").slice(0, 160)),
+  checkAppUpdate: () => ipcRenderer.invoke("tmp:check-app-update"),
+  installAppUpdate: () => ipcRenderer.invoke("tmp:install-app-update"),
+  openExternal: (url) => ipcRenderer.invoke("tmp:open-external", String(url || "")),
   onProgress: (callback) => {
     if (typeof callback !== "function") return () => {};
     const listener = (_event, progress) => {

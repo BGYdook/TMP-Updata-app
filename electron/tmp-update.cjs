@@ -130,8 +130,8 @@ async function ensureGamesClosed() {
   } catch {
     return;
   }
-  if (/"(?:TruckersMP(?:-Launcher)?|eurotrucks2|amtrucks)\.exe"/i.test(stdout)) {
-    throw new Error("请先关闭 TruckersMP 启动器、欧卡 2 和美卡后再更新");
+  if (/"(?:eurotrucks2|amtrucks)\.exe"/i.test(stdout)) {
+    throw new Error("请先关闭欧卡 2 或美卡后再更新；TruckersMP 启动器可以保持打开");
   }
 }
 

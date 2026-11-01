@@ -8,11 +8,13 @@ import {
   ChevronDown,
   CircleHelp,
   CloudDownload,
+  ExternalLink,
   FileDown,
   Download,
   FileClock,
   FolderOpen,
   Gauge,
+  Github,
   HardDrive,
   Info,
   Loader2,
@@ -61,10 +63,20 @@ const AUTO_DETECT_STORAGE_KEY = "tmp-sync-auto-detect";
 const THEME_STORAGE_KEY = "tmp-sync-theme";
 const UPDATE_CONCURRENCY = 2;
 const AUTO_DETECT_INTERVAL = 5 * 60_000;
+const APP_VERSION = "1.2.1";
+const GITHUB_REPO_URL = "https://github.com/BGYdook/TMP-Updata-app";
+const CNB_REPO_URL = "https://cnb.cool/BGYdook/TMP-Updata-app";
 
 interface ConfirmState {
   paths: string[];
   bytes: number;
+}
+
+interface AppUpdateState {
+  status: "idle" | "checking" | "current" | "available" | "installing" | "error";
+  latestVersion?: string;
+  releaseUrl?: string;
+  message?: string;
 }
 
 function isActionable(item: SyncItem): boolean {
@@ -239,6 +251,7 @@ export default function App() {
     () => localStorage.getItem(AUTO_DETECT_STORAGE_KEY) !== "false",
   );
   const [backgroundMode, setBackgroundMode] = useState(true);
+  const [appUpdate, setAppUpdate] = useState<AppUpdateState>({ status: "idle" });
   const [lastDetectedAt, setLastDetectedAt] = useState<Date | null>(null);
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     const stored = localStorage.getItem(THEME_STORAGE_KEY);
@@ -285,6 +298,60 @@ export default function App() {
     setNotice(message);
     noticeTimerRef.current = window.setTimeout(() => setNotice(null), 4500);
   }, []);
+
+  const openRepository = useCallback(async (url: string) => {
+    try {
+      if (window.tmpDesktop?.openExternal) {
+        await window.tmpDesktop.openExternal(url);
+      } else {
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+    } catch (error) {
+      showNotice(`无法打开链接：${(error as Error).message}`);
+    }
+  }, [showNotice]);
+
+  const checkAppUpdate = useCallback(async () => {
+    if (!window.tmpDesktop?.checkAppUpdate) {
+      setAppUpdate({ status: "current", message: "浏览器模式不支持更新软件本体，请使用桌面版" });
+      return;
+    }
+    setAppUpdate({ status: "checking", message: "正在检查 CNB 最新版本…" });
+    try {
+      const result = await window.tmpDesktop.checkAppUpdate();
+      setAppUpdate({
+        status: result.ok ? (result.available ? "available" : "current") : "error",
+        latestVersion: result.latestVersion,
+        releaseUrl: result.releaseUrl,
+        message: result.message,
+      });
+      if (result.ok && result.available) showNotice(`发现软件新版本 v${result.latestVersion}，可在“关于与使用说明”中安装`);
+    } catch (error) {
+      setAppUpdate({ status: "error", message: (error as Error).message });
+    }
+  }, [showNotice]);
+
+  const installAppUpdate = useCallback(async () => {
+    if (!window.tmpDesktop?.installAppUpdate) return;
+    setAppUpdate((current) => ({ ...current, status: "installing", message: "正在下载 CNB 安装包…" }));
+    try {
+      const result = await window.tmpDesktop.installAppUpdate();
+      if (!result.ok) {
+        setAppUpdate((current) => ({ ...current, status: "available", message: result.message }));
+        return;
+      }
+      setAppUpdate((current) => ({ ...current, message: result.message }));
+      showNotice(result.message);
+    } catch (error) {
+      setAppUpdate((current) => ({ ...current, status: "available", message: (error as Error).message }));
+    }
+  }, [showNotice]);
+
+  useEffect(() => {
+    if (!window.tmpDesktop?.checkAppUpdate) return;
+    const timer = window.setTimeout(() => void checkAppUpdate(), 2500);
+    return () => window.clearTimeout(timer);
+  }, [checkAppUpdate]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1359,7 +1426,7 @@ export default function App() {
         const result = await window.tmpDesktop.exportDiagnostics(snapshot);
         if (result.ok) showNotice("诊断日志已导出");
       } else {
-        const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), appVersion: "1.2.0", ...snapshot }, null, 2)], { type: "application/json" });
+        const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), appVersion: "1.2.1", ...snapshot }, null, 2)], { type: "application/json" });
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
         link.href = url;
@@ -1568,8 +1635,8 @@ export default function App() {
             本地目录
           </button>
           <button type="button" onClick={() => setGuideOpen(true)}>
-            <CircleHelp size={18} />
-            使用说明
+            <Info size={18} />
+            关于与使用说明
           </button>
         </nav>
 
@@ -1595,7 +1662,7 @@ export default function App() {
         </div>
         <div className="sidebar-footer">
           <span>TMP SYNC</span>
-          <span>v1.2.0</span>
+          <span>v1.2.1</span>
         </div>
       </aside>
 
@@ -2583,7 +2650,7 @@ export default function App() {
           className="modal-layer"
           role="dialog"
           aria-modal="true"
-          aria-label="使用说明"
+          aria-label="关于与使用说明"
         >
           <button
             className="modal-backdrop"
@@ -2596,8 +2663,8 @@ export default function App() {
                 <CircleHelp size={20} />
               </div>
               <div>
-                <h3>三步完成更新</h3>
-                <p>工具会自动完成比对、下载与文件校验</p>
+                <h3>关于 TMP 更新工具</h3>
+                <p>自动检测、校验并更新 TruckersMP 客户端文件</p>
               </div>
               <button
                 type="button"
@@ -2607,6 +2674,50 @@ export default function App() {
                 <X size={18} />
               </button>
             </div>
+            <div className="about-summary">
+              <div>
+                <strong>TMP 更新工具</strong>
+                <span>v{APP_VERSION}</span>
+              </div>
+              <p>作者：BGYdook</p>
+              <div className="about-links">
+                <button type="button" onClick={() => void openRepository(GITHUB_REPO_URL)}>
+                  <Github size={15} />
+                  GitHub 仓库
+                  <ExternalLink size={13} />
+                </button>
+                <button type="button" onClick={() => void openRepository(CNB_REPO_URL)}>
+                  <CloudDownload size={15} />
+                  CNB 仓库
+                  <ExternalLink size={13} />
+                </button>
+              </div>
+              <div className="app-update-row">
+                <div>
+                  <strong>软件更新</strong>
+                  <span>
+                    {appUpdate.message || "更新源：CNB Release"}
+                  </span>
+                </div>
+                {appUpdate.status === "available" ? (
+                  <button type="button" className="button primary" onClick={() => void installAppUpdate()}>
+                    <Download size={14} />
+                    安装 v{appUpdate.latestVersion}
+                  </button>
+                ) : (
+                  <button type="button" className="button secondary" onClick={() => void checkAppUpdate()} disabled={appUpdate.status === "checking" || appUpdate.status === "installing"}>
+                    <RefreshCw size={14} className={appUpdate.status === "checking" ? "spin" : undefined} />
+                    {appUpdate.status === "checking" ? "检查中" : "检查更新"}
+                  </button>
+                )}
+              </div>
+              {appUpdate.releaseUrl && appUpdate.status === "available" && (
+                <button type="button" className="docs-link" onClick={() => void openRepository(appUpdate.releaseUrl!)}>
+                  查看 CNB 发布页 <ExternalLink size={13} />
+                </button>
+              )}
+            </div>
+            <div className="guide-divider"><span>使用流程</span></div>
             <div className="guide-steps">
               <div>
                 <span>01</span>
@@ -2644,7 +2755,7 @@ export default function App() {
             </div>
             <div className="guide-note">
               <ShieldCheck size={17} />
-              建议在更新前关闭 TMP 客户端，避免 Windows 文件占用导致写入失败。
+              更新前请关闭欧卡 2 或美卡；TruckersMP 启动器可以保持打开。
             </div>
             <button
               type="button"
