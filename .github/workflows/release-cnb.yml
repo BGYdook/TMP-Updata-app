@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing version tag, for example v1.2.2"
+        description: "Existing version tag, for example v1.3.0"
         required: true
         type: string
 
@@ -111,7 +111,18 @@ jobs:
           fi
           git remote add cnb "https://${CNB_USERNAME}:${CNB_TOKEN}@cnb.cool/${CNB_REPO_SLUG}.git"
           git fetch cnb --prune
-          git push cnb "refs/tags/v${{ needs.build.outputs.version }}:refs/tags/v${{ needs.build.outputs.version }}"
+          tag="v${{ needs.build.outputs.version }}"
+          local_commit="$(git rev-list -n 1 "refs/tags/${tag}")"
+          remote_commit="$(git ls-remote cnb "refs/tags/${tag}^{}" "refs/tags/${tag}" | tail -n 1 | awk '{print $1}')"
+          if [[ -n "${remote_commit}" ]]; then
+            if [[ "${remote_commit}" != "${local_commit}" ]]; then
+              echo "CNB tag ${tag} already exists but points to a different commit." >&2
+              exit 1
+            fi
+            echo "CNB tag ${tag} already points to the current commit; continuing."
+          else
+            git push cnb "refs/tags/${tag}:refs/tags/${tag}"
+          fi
 
       - name: Wait for CNB release page
         shell: bash
