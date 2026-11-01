@@ -129,7 +129,7 @@ try {
         return {
           ok: true,
           available: true,
-          currentVersion: "1.2.1",
+          currentVersion: "1.2.2",
           latestVersion: "1.3.0",
           releaseUrl: "https://cnb.cool/BGYdook/TMP-Updata-app/-/releases/tag/v1.3.0",
           message: "发现新版本 v1.3.0",

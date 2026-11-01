@@ -63,7 +63,7 @@ const AUTO_DETECT_STORAGE_KEY = "tmp-sync-auto-detect";
 const THEME_STORAGE_KEY = "tmp-sync-theme";
 const UPDATE_CONCURRENCY = 2;
 const AUTO_DETECT_INTERVAL = 5 * 60_000;
-const APP_VERSION = "1.2.1";
+const APP_VERSION = "1.2.2";
 const GITHUB_REPO_URL = "https://github.com/BGYdook/TMP-Updata-app";
 const CNB_REPO_URL = "https://cnb.cool/BGYdook/TMP-Updata-app";
 
@@ -1426,7 +1426,7 @@ export default function App() {
         const result = await window.tmpDesktop.exportDiagnostics(snapshot);
         if (result.ok) showNotice("诊断日志已导出");
       } else {
-        const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), appVersion: "1.2.1", ...snapshot }, null, 2)], { type: "application/json" });
+        const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), appVersion: "1.2.2", ...snapshot }, null, 2)], { type: "application/json" });
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
         link.href = url;
@@ -1662,7 +1662,7 @@ export default function App() {
         </div>
         <div className="sidebar-footer">
           <span>TMP SYNC</span>
-          <span>v1.2.1</span>
+          <span>v1.2.2</span>
         </div>
       </aside>
 
