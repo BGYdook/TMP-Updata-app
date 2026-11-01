@@ -63,7 +63,7 @@ const AUTO_DETECT_STORAGE_KEY = "tmp-sync-auto-detect";
 const THEME_STORAGE_KEY = "tmp-sync-theme";
 const UPDATE_CONCURRENCY = 2;
 const AUTO_DETECT_INTERVAL = 5 * 60_000;
-const APP_VERSION = "1.3.0";
+const APP_VERSION = "1.3.1";
 const GITHUB_REPO_URL = "https://github.com/BGYdook/TMP-Updata-app";
 const CNB_REPO_URL = "https://cnb.cool/BGYdook/TMP-Updata-app";
 

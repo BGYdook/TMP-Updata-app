@@ -25,6 +25,7 @@ const CNB_REPO_SLUG = "BGYdook/TMP-Updata-app";
 const CNB_RELEASES_URL = `https://cnb.cool/${CNB_REPO_SLUG}/-/releases/latest`;
 const CNB_RELEASE_ORIGIN = "https://cnb.cool";
 const CNB_CDN_ORIGIN = "https://cnb.cdn-go.cn";
+const CNB_ASSET_ORIGIN = "https://asset.cnb.cool";
 const APP_ORIGIN = "tmp-app://bundle";
 protocol.registerSchemesAsPrivileged([
   {
@@ -513,7 +514,7 @@ ipcMain.handle("tmp:install-app-update", async (event) => {
     });
     if (!response.ok || !response.body) throw new Error(`下载更新安装包失败（HTTP ${response.status}）`);
     const finalUrl = new URL(response.url || latest.downloadUrl);
-    if (![CNB_RELEASE_ORIGIN, CNB_CDN_ORIGIN].includes(finalUrl.origin)) {
+    if (![CNB_RELEASE_ORIGIN, CNB_CDN_ORIGIN, CNB_ASSET_ORIGIN].includes(finalUrl.origin)) {
       throw new Error("更新安装包被重定向到非受信任地址");
     }
     const contentLength = Number(response.headers.get("content-length")) || 0;
@@ -551,17 +552,20 @@ ipcMain.handle("tmp:install-app-update", async (event) => {
 
 ipcMain.handle("tmp:open-external", async (event, value) => {
   assertTrustedSender(event);
-  const allowed = new Set([
-    "https://github.com/BGYdook/TMP-Updata-app",
-    "https://cnb.cool/BGYdook/TMP-Updata-app",
-  ]);
-  let target;
+  let parsed;
   try {
-    target = new URL(String(value || "")).toString().replace(/\/+$/, "");
+    parsed = new URL(String(value || ""));
   } catch {
     throw new Error("外部链接无效");
   }
-  if (!allowed.has(target)) throw new Error("外部链接不在允许范围内");
+  const pathName = parsed.pathname.replace(/\/+$/, "") || "/";
+  const repoPath = "/BGYdook/TMP-Updata-app";
+  const allowed = parsed.protocol === "https:" && (
+    (parsed.origin === "https://github.com" && (pathName === repoPath || pathName.startsWith(`${repoPath}/releases`))) ||
+    (parsed.origin === CNB_RELEASE_ORIGIN && (pathName === repoPath || pathName.startsWith(`${repoPath}/-/releases`)))
+  );
+  if (!allowed) throw new Error("外部链接不在允许范围内");
+  const target = parsed.toString();
   await shell.openExternal(target);
   return { ok: true };
 });
@@ -584,6 +588,7 @@ if (gotLock) {
             target.origin === TMP_API_BASE ||
             target.origin === CNB_RELEASE_ORIGIN ||
             target.origin === CNB_CDN_ORIGIN ||
+            target.origin === CNB_ASSET_ORIGIN ||
             (!app.isPackaged && target.origin === new URL(DEV_URL).origin);
           callback({ cancel: !allowed });
         } catch {

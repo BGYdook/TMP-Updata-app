@@ -130,14 +130,14 @@ try {
           ok: true,
           available: true,
           currentVersion: "1.2.2",
-          latestVersion: "1.3.0",
-          releaseUrl: "https://cnb.cool/BGYdook/TMP-Updata-app/-/releases/tag/v1.3.0",
-          message: "发现新版本 v1.3.0",
+          latestVersion: "1.3.1",
+          releaseUrl: "https://cnb.cool/BGYdook/TMP-Updata-app/-/releases/tag/v1.3.1",
+          message: "发现新版本 v1.3.1",
         };
       },
       async installAppUpdate() {
         test.appUpdated = true;
-        return { ok: true, message: "已下载 v1.3.0 安装包，正在启动安装程序" };
+        return { ok: true, message: "已下载 v1.3.1 安装包，正在启动安装程序" };
       },
       async openExternal(url) {
         test.opened = url;
@@ -187,8 +187,8 @@ try {
   await page.getByRole("button", { name: "关于与使用说明" }).click();
   await page.getByRole("dialog", { name: "关于与使用说明" }).getByText("作者：BGYdook").waitFor();
   await page.getByRole("dialog", { name: "关于与使用说明" }).getByRole("button", { name: "检查更新" }).click();
-  await page.getByRole("dialog", { name: "关于与使用说明" }).getByRole("button", { name: "安装 v1.3.0" }).waitFor();
-  await page.getByRole("dialog", { name: "关于与使用说明" }).getByRole("button", { name: "安装 v1.3.0" }).click();
+  await page.getByRole("dialog", { name: "关于与使用说明" }).getByRole("button", { name: "安装 v1.3.1" }).waitFor();
+  await page.getByRole("dialog", { name: "关于与使用说明" }).getByRole("button", { name: "安装 v1.3.1" }).click();
   assert.equal(await page.evaluate(() => window.dashboardTest.appUpdated), true);
   await page.keyboard.press("Escape");
   assert.equal(await page.locator("tbody tr").count(), 4);
