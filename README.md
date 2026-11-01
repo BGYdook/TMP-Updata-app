@@ -66,6 +66,35 @@ npm run desktop:build
 
 安装包输出到 `release/`。
 
+## GitHub 同步到 CNB
+
+项目已经提供两个 GitHub Actions：
+
+- `.github/workflows/sync-cnb.yml`：每次向 GitHub 推送分支时，把同名分支推送到 CNB。
+- `.github/workflows/release-cnb.yml`：推送 `v1.2.0` 这类版本标签时，构建 Windows 安装包，同时发布 GitHub Release 和 CNB Release 附件。
+
+首次使用时，在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 中配置：
+
+| 名称 | 类型 | 内容 |
+| --- | --- | --- |
+| `CNB_USERNAME` | Secret | CNB 用户名 |
+| `CNB_TOKEN` | Secret | CNB 个人访问令牌，需要仓库写入权限 |
+| `CNB_REPO_SLUG` | Repository variable | CNB 仓库路径，例如 `你的组织/tmp-sync` |
+
+CNB 仓库需要提前创建，并确保这个令牌可以推送代码和创建/上传 Release 附件。GitHub 和 CNB 的默认分支名称建议保持一致。令牌只放在 GitHub Actions Secret 中，不要写入工作流文件。
+
+发布新版本的流程：
+
+```powershell
+# 先把 package.json 的 version 改成新版本
+git add package.json package-lock.json
+git commit -m "release: v1.2.1"
+git tag v1.2.1
+git push origin master --tags
+```
+
+如果你的 GitHub 默认分支是 `main`，把上面的 `master` 换成 `main`。推送完成后，在 GitHub Actions 页面可以看到 `Sync to CNB` 和 `Build and publish release to GitHub and CNB` 两个任务。工作流会检查标签版本是否和 `package.json` 一致，不一致时会停止发布，避免 GitHub 与 CNB 出现不同版本。
+
 应用图标为橙色卡车与更新箭头，包含 SVG 源文件、512 px PNG，以及 16–256 px 共 10 个尺寸的 ICO，位于 `public/app-icon.*`。Windows 程序、安装包和浏览器均已接入。修改 SVG 后可用 `npm run build:icons` 重新生成（需要 Chrome / Edge，或设置 `CHROME_PATH`）。
 
 默认使用国内镜像下载 electron-builder 的 Windows 打包工具；如需切换镜像，可设置 `ELECTRON_BUILDER_BINARIES_MIRROR` 环境变量。

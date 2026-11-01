@@ -1,0 +1,150 @@
+name: Build and publish release to GitHub and CNB
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing version tag, for example v1.2.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Read package version
+        id: version
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          "version=$version" >> $env:GITHUB_OUTPUT
+          if ("v$version" -ne "${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}") {
+            throw "package.json version $version does not match the release tag"
+          }
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Windows installer
+        run: npm run desktop:build
+        env:
+          ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TMP-Update-Windows-${{ steps.version.outputs.version }}
+          path: release/TMP-Update-${{ steps.version.outputs.version }}-Setup.exe
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: TMP 更新工具 v${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          files: release/TMP-Update-${{ steps.version.outputs.version }}-Setup.exe
+
+      - name: Prepare CNB attachment
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path cnb-artifacts | Out-Null
+          Copy-Item "release/TMP-Update-${{ steps.version.outputs.version }}-Setup.exe" cnb-artifacts/
+
+      - name: Upload CNB attachment artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TMP-Update-CNB-${{ steps.version.outputs.version }}
+          path: cnb-artifacts/**
+
+  publish-cnb:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.build.outputs.version }}
+          fetch-depth: 0
+
+      - name: Download CNB attachment
+        uses: actions/download-artifact@v4
+        with:
+          name: TMP-Update-CNB-${{ needs.build.outputs.version }}
+          path: cnb-artifacts
+
+      - name: Push tag to CNB
+        shell: bash
+        env:
+          CNB_USERNAME: ${{ secrets.CNB_USERNAME }}
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+          CNB_REPO_SLUG: ${{ vars.CNB_REPO_SLUG }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${CNB_USERNAME}" || -z "${CNB_TOKEN}" || -z "${CNB_REPO_SLUG}" ]]; then
+            echo "Configure CNB_USERNAME, CNB_TOKEN and repository variable CNB_REPO_SLUG first." >&2
+            exit 1
+          fi
+          git remote add cnb "https://${CNB_USERNAME}:${CNB_TOKEN}@cnb.cool/${CNB_REPO_SLUG}.git"
+          git fetch cnb --prune
+          git push cnb "refs/tags/v${{ needs.build.outputs.version }}:refs/tags/v${{ needs.build.outputs.version }}"
+
+      - name: Wait for CNB release page
+        shell: bash
+        env:
+          CNB_REPO_SLUG: ${{ vars.CNB_REPO_SLUG }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          url="https://cnb.cool/${CNB_REPO_SLUG}/-/releases/tag/v${VERSION}"
+          for attempt in {1..20}; do
+            if curl --fail --silent --show-error --location "$url" | grep -q "Download source code"; then
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "CNB release page was not ready: $url" >&2
+          exit 1
+
+      - name: Upload installer to CNB release
+        shell: bash
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+          CNB_REPO_SLUG: ${{ vars.CNB_REPO_SLUG }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -e CNB_TOKEN \
+            -e CNB_API_ENDPOINT=https://api.cnb.cool \
+            -e CNB_WEB_ENDPOINT=https://cnb.cool \
+            -e CNB_REPO_SLUG \
+            -e PLUGIN_TAG="v${VERSION}" \
+            -e PLUGIN_ATTACHMENTS="cnb-artifacts/**/*" \
+            -v "${GITHUB_WORKSPACE}:/work" \
+            -w /work \
+            cnbcool/attachments:latest
