@@ -186,6 +186,8 @@ try {
 
   await page.getByRole("button", { name: "关于与使用说明" }).click();
   await page.getByRole("dialog", { name: "关于与使用说明" }).getByText("作者：BGYdook").waitFor();
+  await page.getByRole("dialog", { name: "关于与使用说明" }).getByRole("button", { name: "API 文档" }).click();
+  assert.equal(await page.evaluate(() => window.dashboardTest.opened), "https://tmplistoss.bgydook.cn/docs/");
   await page.getByRole("dialog", { name: "关于与使用说明" }).getByRole("button", { name: "检查更新" }).click();
   await page.getByRole("dialog", { name: "关于与使用说明" }).getByRole("button", { name: "安装 v1.3.1" }).waitFor();
   await page.getByRole("dialog", { name: "关于与使用说明" }).getByRole("button", { name: "安装 v1.3.1" }).click();

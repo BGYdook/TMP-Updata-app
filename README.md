@@ -1,6 +1,8 @@
 # TMP 更新工具
 
-基于 [TMP File Mirror API](https://tmplistoss.bgydook.cn/docs/) 的本地客户端文件同步工具。
+基于 [TMP File Mirror API](https://tmplistoss.bgydook.cn/docs/) 的本地客户端文件更新工具。
+
+公开 API 文档：<https://tmplistoss.bgydook.cn/docs/>。项目内的接口说明见 [API.md](API.md)。
 
 ## 功能
 
@@ -80,7 +82,7 @@ npm run desktop:build
 | --- | --- | --- |
 | `CNB_USERNAME` | Secret | CNB 用户名 |
 | `CNB_TOKEN` | Secret | CNB 个人访问令牌，需要仓库写入权限 |
-| `CNB_REPO_SLUG` | Repository variable | CNB 仓库路径，例如 `你的组织/tmp-sync` |
+| `CNB_REPO_SLUG` | Repository variable | CNB 仓库路径，例如 `你的组织/tmp-file-mirror` |
 
 CNB 仓库需要提前创建，并确保这个令牌可以推送代码和创建/上传 Release 附件。GitHub 和 CNB 的默认分支名称建议保持一致。令牌只放在 GitHub Actions Secret 中，不要写入工作流文件。
 

@@ -201,7 +201,7 @@ class TmpUpdateManager {
     }
     const base = normalizeBaseUrl(baseUrl);
     const response = await this.fetcher(`${base}/api/tmp/files`, {
-      headers: { Accept: "application/json", "User-Agent": "TMP-Sync-Desktop" },
+      headers: { Accept: "application/json", "User-Agent": "TMP-File-Mirror-Desktop" },
       cache: "no-store",
       signal: AbortSignal.timeout(20_000),
     });

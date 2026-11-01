@@ -103,7 +103,7 @@ function compareAppVersions(left, right) {
 
 async function getLatestCnbRelease() {
   const response = await net.fetch(CNB_RELEASES_URL, {
-    headers: { Accept: "text/html", "User-Agent": "TMP-Sync-Desktop" },
+    headers: { Accept: "text/html", "User-Agent": "TMP-File-Mirror-Desktop" },
     cache: "no-cache",
   });
   if (!response.ok) throw new Error(`获取 CNB 更新信息失败（HTTP ${response.status}）`);
@@ -509,7 +509,7 @@ ipcMain.handle("tmp:install-app-update", async (event) => {
       return { ok: false, message: "当前已是最新版本" };
     }
     const response = await net.fetch(latest.downloadUrl, {
-      headers: { Accept: "application/octet-stream", "User-Agent": "TMP-Sync-Desktop" },
+      headers: { Accept: "application/octet-stream", "User-Agent": "TMP-File-Mirror-Desktop" },
       cache: "no-cache",
     });
     if (!response.ok || !response.body) throw new Error(`下载更新安装包失败（HTTP ${response.status}）`);
@@ -562,7 +562,8 @@ ipcMain.handle("tmp:open-external", async (event, value) => {
   const repoPath = "/BGYdook/TMP-Updata-app";
   const allowed = parsed.protocol === "https:" && (
     (parsed.origin === "https://github.com" && (pathName === repoPath || pathName.startsWith(`${repoPath}/releases`))) ||
-    (parsed.origin === CNB_RELEASE_ORIGIN && (pathName === repoPath || pathName.startsWith(`${repoPath}/-/releases`)))
+    (parsed.origin === CNB_RELEASE_ORIGIN && (pathName === repoPath || pathName.startsWith(`${repoPath}/-/releases`))) ||
+    (parsed.origin === TMP_API_BASE && (pathName === "/docs" || pathName.startsWith("/docs/")))
   );
   if (!allowed) throw new Error("外部链接不在允许范围内");
   const target = parsed.toString();

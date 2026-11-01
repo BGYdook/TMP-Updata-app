@@ -3,6 +3,7 @@ import {
   AlertCircle,
   ArrowRight,
   ArrowDownToLine,
+  BookOpen,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -32,7 +33,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { buildDownloadUrl, DEFAULT_API_BASE, fetchTmpFiles } from "./lib/api";
+import { buildDownloadUrl, DEFAULT_API_BASE, DOCS_URL, fetchTmpFiles } from "./lib/api";
 import { downloadAndInstall } from "./lib/download";
 import {
   fileBaseName,
@@ -1591,8 +1592,8 @@ export default function App() {
             <span className="brand-pulse" />
           </div>
           <div>
-            <strong>TMP Sync</strong>
-            <span>CLIENT UPDATER</span>
+            <strong>TMP File Mirror</strong>
+            <span>FILE UPDATER</span>
           </div>
         </div>
 
@@ -1661,7 +1662,7 @@ export default function App() {
           </span>
         </div>
         <div className="sidebar-footer">
-          <span>TMP SYNC</span>
+          <span>TMP FILE MIRROR</span>
           <span>v{APP_VERSION}</span>
         </div>
       </aside>
@@ -2689,6 +2690,11 @@ export default function App() {
                 <button type="button" onClick={() => void openRepository(CNB_REPO_URL)}>
                   <CloudDownload size={15} />
                   CNB 仓库
+                  <ExternalLink size={13} />
+                </button>
+                <button type="button" onClick={() => void openRepository(DOCS_URL)}>
+                  <BookOpen size={15} />
+                  API 文档
                   <ExternalLink size={13} />
                 </button>
               </div>
