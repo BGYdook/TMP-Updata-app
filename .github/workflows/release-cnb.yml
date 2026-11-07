@@ -1,25 +1,108 @@
-name: Build and publish release to GitHub and CNB
+name: Sync, build and publish to GitHub and CNB
 
 on:
   push:
+    branches:
+      - "**"
     tags:
       - "v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing version tag, for example vX.Y.Z"
-        required: true
+        description: "Existing version tag to retry, or leave empty to sync and release the selected branch"
+        required: false
+        default: ""
         type: string
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: sync-release-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      publish: ${{ steps.release.outputs.publish }}
+    steps:
+      - name: Checkout requested revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        id: release
+        shell: bash
+        env:
+          REQUESTED_TAG: ${{ inputs.tag }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          echo "publish=false" >> "${GITHUB_OUTPUT}"
+          if [[ -n "${REQUESTED_TAG}" ]]; then
+            tag="${REQUESTED_TAG}"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME}"
+          elif [[ "${GITHUB_REF_NAME}" != "${DEFAULT_BRANCH}" ]]; then
+            echo "Only repository sync is needed for branch ${GITHUB_REF_NAME}." >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          else
+            version="$(node -p 'require("./package.json").version')"
+            tag="v${version}"
+            if git show-ref --verify --quiet "refs/tags/${tag}"; then
+              if [[ "$(git rev-parse "refs/tags/${tag}^{commit}")" != "$(git rev-parse HEAD)" ]]; then
+                echo "Release skipped: ${tag} already exists at an earlier commit. Bump package.json to publish a new version; rerun with tag ${tag} to retry its release. Repository sync will continue below." >> "${GITHUB_STEP_SUMMARY}"
+                exit 0
+              fi
+            fi
+          fi
+          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must use vX.Y.Z format." >&2
+            exit 1
+          fi
+          version="$(node -p 'require("./package.json").version')"
+          if [[ "${tag}" != "v${version}" ]]; then
+            echo "package.json version ${version} does not match release tag ${tag}." >&2
+            exit 1
+          fi
+          if ! git show-ref --verify --quiet "refs/tags/${tag}"; then
+            git tag "${tag}"
+            git push origin "refs/tags/${tag}:refs/tags/${tag}"
+          fi
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "publish=true" >> "${GITHUB_OUTPUT}"
+          echo "Will build and publish ${tag} in this workflow run." >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Sync branch and release tag to CNB
+        shell: bash
+        env:
+          CNB_USERNAME: ${{ secrets.CNB_USERNAME }}
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+          CNB_REPO_SLUG: ${{ vars.CNB_REPO_SLUG }}
+          REQUESTED_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${CNB_USERNAME}" || -z "${CNB_TOKEN}" || -z "${CNB_REPO_SLUG}" ]]; then
+            echo "Configure CNB_USERNAME, CNB_TOKEN and repository variable CNB_REPO_SLUG first." >&2
+            exit 1
+          fi
+          git remote add cnb "https://${CNB_USERNAME}:${CNB_TOKEN}@cnb.cool/${CNB_REPO_SLUG}.git"
+          git fetch cnb --prune
+          if [[ "${GITHUB_REF_TYPE}" == "branch" && -z "${REQUESTED_TAG}" ]]; then
+            git push --force-with-lease cnb "HEAD:refs/heads/${GITHUB_REF_NAME}"
+          fi
+          if [[ -n "${RELEASE_TAG}" ]]; then
+            git push cnb "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          fi
+
   build:
+    needs: prepare
+    if: needs.prepare.outputs.publish == 'true'
     runs-on: windows-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -27,16 +110,18 @@ jobs:
       - name: Checkout tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          ref: refs/tags/${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
 
       - name: Read package version
         id: version
         shell: pwsh
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
           "version=$version" >> $env:GITHUB_OUTPUT
-          if ("v$version" -ne "${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}") {
+          if ("v$version" -ne $env:RELEASE_TAG) {
             throw "package.json version $version does not match the release tag"
           }
 
@@ -120,34 +205,6 @@ jobs:
         with:
           name: TMP-Update-CNB-${{ needs.build.outputs.version }}
           path: cnb-artifacts
-
-      - name: Push tag to CNB
-        shell: bash
-        env:
-          CNB_USERNAME: ${{ secrets.CNB_USERNAME }}
-          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
-          CNB_REPO_SLUG: ${{ vars.CNB_REPO_SLUG }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${CNB_USERNAME}" || -z "${CNB_TOKEN}" || -z "${CNB_REPO_SLUG}" ]]; then
-            echo "Configure CNB_USERNAME, CNB_TOKEN and repository variable CNB_REPO_SLUG first." >&2
-            exit 1
-          fi
-          git remote add cnb "https://${CNB_USERNAME}:${CNB_TOKEN}@cnb.cool/${CNB_REPO_SLUG}.git"
-          git fetch cnb --prune
-          tag="v${{ needs.build.outputs.version }}"
-          local_commit="$(git rev-list -n 1 "refs/tags/${tag}")"
-          remote_commit="$(git ls-remote cnb "refs/tags/${tag}^{}" "refs/tags/${tag}" | tail -n 1 | awk '{print $1}')"
-          if [[ -n "${remote_commit}" ]]; then
-            if [[ "${remote_commit}" != "${local_commit}" ]]; then
-              echo "CNB tag ${tag} points to ${remote_commit}; updating it to ${local_commit}."
-              git push --force cnb "refs/tags/${tag}:refs/tags/${tag}"
-            else
-              echo "CNB tag ${tag} already points to the current commit; continuing."
-            fi
-          else
-            git push cnb "refs/tags/${tag}:refs/tags/${tag}"
-          fi
 
       - name: Create CNB release and upload installer
         shell: bash

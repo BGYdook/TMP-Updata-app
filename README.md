@@ -75,10 +75,12 @@ npm run desktop:build
 
 ## GitHub 同步到 CNB
 
-项目已经提供两个 GitHub Actions：
+项目使用一个 GitHub Actions 工作流 `.github/workflows/release-cnb.yml`，名称为 `Sync, build and publish to GitHub and CNB`：
 
-- `.github/workflows/sync-cnb.yml`：每次向 GitHub 推送分支时，把同名分支推送到 CNB。
-- `.github/workflows/release-cnb.yml`：推送 `vX.Y.Z` 版本标签时，构建 Windows 安装包，同时发布 GitHub Release 和 CNB Release 附件。CNB 发布步骤使用 Release API 创建版本并上传附件，重复运行会复用已有版本。
+- 每次推送分支时，将同名分支同步到 CNB。
+- 推送默认分支时，如果 `package.json` 中的版本尚无对应标签，自动创建 `vX.Y.Z` 标签，然后在同一次运行中构建 Windows 安装包、发布 GitHub Release 和 CNB Release 附件，无需另行推送标签。
+- 已有版本标签指向较早提交时，只同步代码，并在运行摘要中提示先提升版本号；不会把已有版本标签移动到新提交。
+- 直接推送 `vX.Y.Z` 标签也会同步标签并构建发布。手动运行时，可以输入已有标签重试该版本，或留空按所选分支执行。
 
 首次使用时，在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 中配置：
 
@@ -94,14 +96,15 @@ CNB 仓库需要提前创建，并确保这个令牌可以推送代码和创建/
 
 ```powershell
 # 用 npm version 同时更新 package.json 和 package-lock.json；前端、桌面程序和烟测会自动读取它
-npm version 1.3.3 --no-git-tag-version
+npm version 1.3.8 --no-git-tag-version
 git add package.json package-lock.json
-git commit -m "release: v1.3.3"
-git tag v1.3.3
-git push origin master --tags
+git commit -m "release: v1.3.8"
+git push origin master
 ```
 
-如果你的 GitHub 默认分支是 `main`，把上面的 `master` 换成 `main`。推送完成后，在 GitHub Actions 页面可以看到 `Sync to CNB` 和 `Build and publish release to GitHub and CNB` 两个任务。工作流会检查标签版本是否和 `package.json` 一致，不一致时会停止发布，避免 GitHub 与 CNB 出现不同版本。
+如果你的 GitHub 默认分支是 `main`，把上面的 `master` 换成 `main`。推送完成后，在 GitHub Actions 页面查看同一次运行的 `prepare`（判断版本并同步）、`build`（构建并发布 GitHub）和 `publish-cnb`（发布 CNB）任务。工作流会检查标签版本是否和 `package.json` 一致，不一致时会停止发布。自动创建的标签直接交给本次运行构建，不依赖令牌推送标签后再触发另一条工作流。
+
+如果构建或发布失败，在对应运行中选择 **Re-run failed jobs**；也可以通过 **Run workflow** 输入对应标签（例如 `v1.3.8`）重试。重试会复用已有 Release，并重新上传安装包与校验文件。
 
 桌面版启动后会静默检查 CNB Release。发现新版本时，在“关于与使用说明”中点击“安装”即可下载 CNB 安装包并启动安装程序。安装程序启动后应用会退出，软件更新需要重启完成；文件更新和软件更新使用不同的流程。
 
