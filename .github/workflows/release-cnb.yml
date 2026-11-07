@@ -7,73 +7,58 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Existing version tag to retry, or leave empty to sync and release the selected branch"
-        required: false
-        default: ""
-        type: string
 
 permissions:
   contents: write
 
 concurrency:
-  group: sync-release-${{ inputs.tag || github.ref }}
+  group: sync-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   prepare:
     runs-on: ubuntu-latest
     outputs:
-      tag: ${{ steps.release.outputs.tag }}
       publish: ${{ steps.release.outputs.publish }}
     steps:
-      - name: Checkout requested revision
+      - name: Checkout pushed commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Resolve release tag
         id: release
         shell: bash
         env:
-          REQUESTED_TAG: ${{ inputs.tag }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           echo "publish=false" >> "${GITHUB_OUTPUT}"
-          if [[ -n "${REQUESTED_TAG}" ]]; then
-            tag="${REQUESTED_TAG}"
-          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            tag="${GITHUB_REF_NAME}"
-          elif [[ "${GITHUB_REF_NAME}" != "${DEFAULT_BRANCH}" ]]; then
+          if [[ "${GITHUB_REF_TYPE}" != "tag" && "${GITHUB_REF_NAME}" != "${DEFAULT_BRANCH}" ]]; then
             echo "Only repository sync is needed for branch ${GITHUB_REF_NAME}." >> "${GITHUB_STEP_SUMMARY}"
             exit 0
-          else
-            version="$(node -p 'require("./package.json").version')"
-            tag="v${version}"
-            if git show-ref --verify --quiet "refs/tags/${tag}"; then
-              if [[ "$(git rev-parse "refs/tags/${tag}^{commit}")" != "$(git rev-parse HEAD)" ]]; then
-                echo "Release skipped: ${tag} already exists at an earlier commit. Bump package.json to publish a new version; rerun with tag ${tag} to retry its release. Repository sync will continue below." >> "${GITHUB_STEP_SUMMARY}"
-                exit 0
-              fi
-            fi
           fi
+          version="$(node -p 'require("./package.json").version')"
+          tag="v${version}"
           if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Release tag must use vX.Y.Z format." >&2
             exit 1
           fi
-          version="$(node -p 'require("./package.json").version')"
-          if [[ "${tag}" != "v${version}" ]]; then
-            echo "package.json version ${version} does not match release tag ${tag}." >&2
+          if [[ "${GITHUB_REF_TYPE}" == "tag" && "${tag}" != "${GITHUB_REF_NAME}" ]]; then
+            echo "package.json version ${version} does not match pushed tag ${GITHUB_REF_NAME}." >&2
             exit 1
+          fi
+          if git show-ref --verify --quiet "refs/tags/${tag}"; then
+            if [[ "$(git rev-parse "refs/tags/${tag}^{commit}")" != "$(git rev-parse HEAD)" ]]; then
+              echo "Release skipped: ${tag} already exists. Update package.json to a new version to publish; repository sync will continue below." >> "${GITHUB_STEP_SUMMARY}"
+              exit 0
+            fi
           fi
           if ! git show-ref --verify --quiet "refs/tags/${tag}"; then
             git tag "${tag}"
             git push origin "refs/tags/${tag}:refs/tags/${tag}"
           fi
-          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
           echo "publish=true" >> "${GITHUB_OUTPUT}"
           echo "Will build and publish ${tag} in this workflow run." >> "${GITHUB_STEP_SUMMARY}"
 
@@ -83,8 +68,7 @@ jobs:
           CNB_USERNAME: ${{ secrets.CNB_USERNAME }}
           CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
           CNB_REPO_SLUG: ${{ vars.CNB_REPO_SLUG }}
-          REQUESTED_TAG: ${{ inputs.tag }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          PUBLISH_RELEASE: ${{ steps.release.outputs.publish }}
         run: |
           set -euo pipefail
           if [[ -z "${CNB_USERNAME}" || -z "${CNB_TOKEN}" || -z "${CNB_REPO_SLUG}" ]]; then
@@ -93,37 +77,39 @@ jobs:
           fi
           git remote add cnb "https://${CNB_USERNAME}:${CNB_TOKEN}@cnb.cool/${CNB_REPO_SLUG}.git"
           git fetch cnb --prune
-          if [[ "${GITHUB_REF_TYPE}" == "branch" && -z "${REQUESTED_TAG}" ]]; then
+          if [[ "${GITHUB_REF_TYPE}" == "branch" ]]; then
             git push --force-with-lease cnb "HEAD:refs/heads/${GITHUB_REF_NAME}"
           fi
-          if [[ -n "${RELEASE_TAG}" ]]; then
-            git push cnb "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          if [[ "${PUBLISH_RELEASE}" == "true" ]]; then
+            tag="v$(node -p 'require("./package.json").version')"
+            git push cnb "refs/tags/${tag}:refs/tags/${tag}"
           fi
 
   build:
     needs: prepare
     if: needs.prepare.outputs.publish == 'true'
     runs-on: windows-latest
-    outputs:
-      version: ${{ steps.version.outputs.version }}
     steps:
-      - name: Checkout tag
+      - name: Checkout pushed commit
         uses: actions/checkout@v4
         with:
-          ref: refs/tags/${{ needs.prepare.outputs.tag }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Read package version
-        id: version
         shell: pwsh
-        env:
-          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          "version=$version" >> $env:GITHUB_OUTPUT
-          if ("v$version" -ne $env:RELEASE_TAG) {
-            throw "package.json version $version does not match the release tag"
+          if ($version -cnotmatch '^\d+\.\d+\.\d+$') {
+            throw 'package.json version must use X.Y.Z format'
           }
+          $tag = "v$version"
+          $tagCommit = git rev-parse "refs/tags/${tag}^{commit}"
+          if ($LASTEXITCODE -ne 0 -or $tagCommit -ne (git rev-parse HEAD)) {
+            throw 'Release tag does not point to the expected commit'
+          }
+          "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
+          "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -142,17 +128,18 @@ jobs:
       - name: Create installer checksum
         shell: pwsh
         run: |
-          $installer = "release/TMP-Update-${{ steps.version.outputs.version }}-Setup.exe"
+          $installer = "release/TMP-Update-$($env:RELEASE_VERSION)-Setup.exe"
           $checksum = (Get-FileHash -Path $installer -Algorithm SHA256).Hash.ToLowerInvariant()
           "$checksum  $(Split-Path $installer -Leaf)" | Set-Content "$installer.sha256" -Encoding ascii
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TMP-Update-Windows-${{ steps.version.outputs.version }}
+          name: TMP-Update-Windows
+          overwrite: true
           path: |
-            release/TMP-Update-${{ steps.version.outputs.version }}-Setup.exe
-            release/TMP-Update-${{ steps.version.outputs.version }}-Setup.exe.sha256
+            release/TMP-Update-${{ env.RELEASE_VERSION }}-Setup.exe
+            release/TMP-Update-${{ env.RELEASE_VERSION }}-Setup.exe.sha256
           if-no-files-found: error
 
       - name: Prepare release notes
@@ -169,41 +156,44 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: TMP 更新工具 v${{ steps.version.outputs.version }}
-          body_path: release-notes/v${{ steps.version.outputs.version }}.md
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: TMP 更新工具 ${{ env.RELEASE_TAG }}
+          body_path: release-notes/${{ env.RELEASE_TAG }}.md
           generate_release_notes: true
           files: |
-            release/TMP-Update-${{ steps.version.outputs.version }}-Setup.exe
-            release/TMP-Update-${{ steps.version.outputs.version }}-Setup.exe.sha256
-
-      - name: Prepare CNB attachment
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path cnb-artifacts | Out-Null
-          Copy-Item "release/TMP-Update-${{ steps.version.outputs.version }}-Setup.exe" cnb-artifacts/
-          Copy-Item "release/TMP-Update-${{ steps.version.outputs.version }}-Setup.exe.sha256" cnb-artifacts/
-
-      - name: Upload CNB attachment artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: TMP-Update-CNB-${{ steps.version.outputs.version }}
-          path: cnb-artifacts/**
+            release/TMP-Update-${{ env.RELEASE_VERSION }}-Setup.exe
+            release/TMP-Update-${{ env.RELEASE_VERSION }}-Setup.exe.sha256
 
   publish-cnb:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout tag
+      - name: Checkout pushed commit
         uses: actions/checkout@v4
         with:
-          ref: v${{ needs.build.outputs.version }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
+
+      - name: Read package version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p 'require("./package.json").version')"
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "package.json version must use X.Y.Z format." >&2
+            exit 1
+          fi
+          tag="v${version}"
+          if [[ "$(git rev-parse "refs/tags/${tag}^{commit}")" != "$(git rev-parse HEAD)" ]]; then
+            echo "Release tag does not point to the expected commit." >&2
+            exit 1
+          fi
+          echo "RELEASE_VERSION=${version}" >> "${GITHUB_ENV}"
 
       - name: Download CNB attachment
         uses: actions/download-artifact@v4
         with:
-          name: TMP-Update-CNB-${{ needs.build.outputs.version }}
+          name: TMP-Update-Windows
           path: cnb-artifacts
 
       - name: Create CNB release and upload installer
@@ -211,7 +201,7 @@ jobs:
         env:
           CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
           CNB_REPO_SLUG: ${{ vars.CNB_REPO_SLUG }}
-          VERSION: ${{ needs.build.outputs.version }}
+          VERSION: ${{ env.RELEASE_VERSION }}
         run: |
           set -euo pipefail
           tag="v${VERSION}"

@@ -80,7 +80,7 @@ npm run desktop:build
 - 每次推送分支时，将同名分支同步到 CNB。
 - 推送默认分支时，如果 `package.json` 中的版本尚无对应标签，自动创建 `vX.Y.Z` 标签，然后在同一次运行中构建 Windows 安装包、发布 GitHub Release 和 CNB Release 附件，无需另行推送标签。
 - 已有版本标签指向较早提交时，只同步代码，并在运行摘要中提示先提升版本号；不会把已有版本标签移动到新提交。
-- 直接推送 `vX.Y.Z` 标签也会同步标签并构建发布。手动运行时，可以输入已有标签重试该版本，或留空按所选分支执行。
+- 版本号统一读取 `package.json`，标签自动生成为 `v版本号`，无需在 Actions 中填写版本。直接推送对应标签也支持构建发布。
 
 首次使用时，在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 中配置：
 
@@ -102,9 +102,9 @@ git commit -m "release: v1.3.8"
 git push origin master
 ```
 
-如果你的 GitHub 默认分支是 `main`，把上面的 `master` 换成 `main`。推送完成后，在 GitHub Actions 页面查看同一次运行的 `prepare`（判断版本并同步）、`build`（构建并发布 GitHub）和 `publish-cnb`（发布 CNB）任务。工作流会检查标签版本是否和 `package.json` 一致，不一致时会停止发布。自动创建的标签直接交给本次运行构建，不依赖令牌推送标签后再触发另一条工作流。
+如果你的 GitHub 默认分支是 `main`，把上面的 `master` 换成 `main`。之后每次修改版本号并推送代码，即可自动同步、创建标签、构建和发布。所有任务都检出本次推送的同一提交，并直接读取其中的 `package.json`，无需跨任务传递版本号，也不依赖标签推送再触发另一条工作流。
 
-如果构建或发布失败，在对应运行中选择 **Re-run failed jobs**；也可以通过 **Run workflow** 输入对应标签（例如 `v1.3.8`）重试。重试会复用已有 Release，并重新上传安装包与校验文件。
+如果构建或发布失败，在对应运行中选择 **Re-run failed jobs** 即可重试。手动选择 **Run workflow** 时无需填写版本号；新版本选择默认分支，重试旧版本可选择对应标签。重试会复用已有 Release，并重新上传安装包与校验文件。
 
 桌面版启动后会静默检查 CNB Release。发现新版本时，在“关于与使用说明”中点击“安装”即可下载 CNB 安装包并启动安装程序。安装程序启动后应用会退出，软件更新需要重启完成；文件更新和软件更新使用不同的流程。
 
