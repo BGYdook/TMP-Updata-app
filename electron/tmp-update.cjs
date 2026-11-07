@@ -120,6 +120,42 @@ function targetPath(installPath, filePath) {
   return target;
 }
 
+async function ensureSafeTargetParent(installPath, filePath, create = false) {
+  const root = await fsp.realpath(path.resolve(installPath));
+  const segments = fileSegments(filePath);
+  let current = root;
+  for (const segment of segments.slice(0, -1)) {
+    current = path.join(current, segment);
+    try {
+      const stat = await fsp.lstat(current);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        throw new Error("TMP 目标路径包含链接或非目录，已拒绝访问");
+      }
+      const realCurrent = await fsp.realpath(current);
+      const relative = path.relative(root, realCurrent);
+      if (
+        !relative ||
+        relative === ".." ||
+        relative.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(relative)
+      ) {
+        throw new Error("TMP 目标路径超出安装目录，已拒绝访问");
+      }
+    } catch (error) {
+      if (error?.code !== "ENOENT" || !create) {
+        if (error?.code === "ENOENT") return targetPath(root, filePath);
+        throw error;
+      }
+      await fsp.mkdir(current);
+      const stat = await fsp.lstat(current);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) {
+        throw new Error("TMP 目标路径包含链接或非目录，已拒绝访问");
+      }
+    }
+  }
+  return targetPath(root, filePath);
+}
+
 function resolveDownloadUrl(baseUrl, file) {
   const base = new URL(`${normalizeBaseUrl(baseUrl)}/`);
   const url = new URL(file.downloadUrl || `/files${file.filePath}?v=${file.md5}`, base);
@@ -225,7 +261,10 @@ class TmpUpdateManager {
 
   async createBackup(installPath, file, target) {
     try {
-      await fsp.stat(target);
+      const stat = await fsp.lstat(target);
+      if (stat.isSymbolicLink() || !stat.isFile()) {
+        throw new Error("TMP 备份目标不是普通文件，已拒绝访问");
+      }
     } catch (error) {
       if (error?.code === "ENOENT") return null;
       throw error;
@@ -271,9 +310,16 @@ class TmpUpdateManager {
     }
     const backupStat = await fsp.stat(entry.backupPath);
     if (backupStat.size !== Number(entry.size)) throw new Error("备份文件大小不一致，已拒绝恢复");
-    const target = targetPath(resolved, entry.filePath);
+    const target = await ensureSafeTargetParent(resolved, entry.filePath, true);
+    try {
+      const existing = await fsp.lstat(target);
+      if (existing.isSymbolicLink() || !existing.isFile()) {
+        throw new Error("TMP 恢复目标不是普通文件，已拒绝访问");
+      }
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
     const temporary = `${target}.tmpup-restore-${crypto.randomUUID()}.part`;
-    await fsp.mkdir(path.dirname(target), { recursive: true });
     await fsp.copyFile(entry.backupPath, temporary);
     const restoredMd5 = await hashFile(temporary);
     if (restoredMd5 !== String(entry.md5).toLowerCase()) {
@@ -398,7 +444,12 @@ class TmpUpdateManager {
   }
 
   async inspect(installPath, file) {
-    const target = targetPath(installPath, file.filePath);
+    let target;
+    try {
+      target = await ensureSafeTargetParent(installPath, file.filePath);
+    } catch (error) {
+      return { ...file, state: "error", error: messageOf(error) };
+    }
     let stat;
     try {
       stat = await fsp.lstat(target);
@@ -466,9 +517,16 @@ class TmpUpdateManager {
   }
 
   async install(installPath, baseUrl, file, report) {
-    const target = targetPath(installPath, file.filePath);
+    const target = await ensureSafeTargetParent(installPath, file.filePath, true);
     const parent = path.dirname(target);
-    await fsp.mkdir(parent, { recursive: true });
+    try {
+      const existing = await fsp.lstat(target);
+      if (existing.isSymbolicLink() || !existing.isFile()) {
+        throw new Error("TMP 更新目标不是普通文件，已拒绝访问");
+      }
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
     const token = crypto.randomUUID();
     const temporary = path.join(parent, `.${path.basename(target)}.tmpup.part`);
     const rollback = path.join(parent, `.${path.basename(target)}.tmpup-${token}.rollback`);

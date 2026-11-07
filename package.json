@@ -1,7 +1,7 @@
 {
   "name": "tmp-file-mirror",
   "private": true,
-  "version": "1.3.4",
+  "version": "1.3.5",
   "description": "TMP File Mirror 客户端文件更新工具",
   "author": "BGYdook",
   "type": "module",

@@ -73,6 +73,9 @@ try {
   await fsp.writeFile(configPath, JSON.stringify({ installPath }));
   await fsp.writeFile(path.join(installPath, "data", "current.bin"), "current-data");
   await fsp.writeFile(path.join(installPath, "data", "outdated.bin"), "outdated-old");
+  const outsidePath = path.join(root, "outside");
+  await fsp.mkdir(outsidePath);
+  await fsp.symlink(outsidePath, path.join(installPath, "data", "linked"), "junction");
 
   const manager = new TmpUpdateManager({
     configPaths: [path.join(root, "missing.json"), configPath],
@@ -88,6 +91,11 @@ try {
   assert.equal(scan.files.find((file) => file.filePath === "/data/current.bin").state, "current");
   assert.equal(scan.files.find((file) => file.filePath === "/data/outdated.bin").state, "outdated");
   assert.equal(scan.files.find((file) => file.filePath === "/nested/missing.bin").state, "missing");
+  const linkedTarget = await manager.inspect(installPath, {
+    ...files[0],
+    filePath: "/data/linked/outside.bin",
+  });
+  assert.equal(linkedTarget.state, "error");
 
   const update = await manager.update({
     installPath,

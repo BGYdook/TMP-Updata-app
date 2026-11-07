@@ -713,6 +713,7 @@ if (gotLock) {
           const allowed =
             target.protocol === "tmp-app:" ||
             target.origin === TMP_API_BASE ||
+            target.origin === TMP_API_BACKUP_BASE ||
             target.origin === CNB_RELEASE_ORIGIN ||
             target.origin === CNB_CDN_ORIGIN ||
             target.origin === CNB_ASSET_ORIGIN ||
