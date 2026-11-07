@@ -69,7 +69,7 @@ async function selectFastestBaseUrl(baseUrls, fetcher) {
   if (!candidates.length) throw new Error("没有可用的更新源");
   const controller = new AbortController();
   try {
-    return await Promise.any(candidates.map(async (base) => {
+    return await Promise.any(candidates.map(async (base, index) => {
       const startedAt = performance.now();
       const requested = `${base}/api/tmp/files`;
       const response = await fetcher(requested, {
@@ -85,7 +85,7 @@ async function selectFastestBaseUrl(baseUrls, fetcher) {
       if (!normalizeManifest(await response.json()).length) {
         throw new Error("TMP 文件清单为空");
       }
-      return { baseUrl: base, latencyMs: Math.round(performance.now() - startedAt) };
+      return { baseUrl: base, sourceName: index === 0 ? "主源" : "备用源", latencyMs: Math.round(performance.now() - startedAt) };
     }));
   } finally {
     controller.abort();
@@ -661,10 +661,13 @@ class TmpUpdateManager {
       await ensureGamesClosed();
       const resolved = await this.validateInstallPath(installPath);
       let sourceLatencyMs;
+      let sourceName;
       if (Array.isArray(baseUrls) && baseUrls.length) {
         const selectedSource = await selectFastestBaseUrl(baseUrls, this.fetcher);
         baseUrl = selectedSource.baseUrl;
         sourceLatencyMs = selectedSource.latencyMs;
+        sourceName = selectedSource.sourceName;
+        this.emit({ phase: "source-selected", sourceName, sourceLatencyMs });
       }
       const files = await this.fetchManifest(baseUrl, true);
       const selected = new Set(Array.isArray(paths) ? paths : []);
@@ -677,7 +680,7 @@ class TmpUpdateManager {
         ? ["current", "outdated", "missing", "error"].includes(file.state)
         : file.state === "outdated" || file.state === "missing");
       if (!targets.length) {
-        return { ok: true, updated: 0, failed: 0, errors: [], message: "没有需要更新的文件", sourceLatencyMs };
+        return { ok: true, updated: 0, failed: 0, errors: [], message: "没有需要更新的文件", sourceLatencyMs, sourceName };
       }
 
       const totalBytes = targets.reduce((sum, file) => sum + file.fileSize, 0);
@@ -778,6 +781,7 @@ class TmpUpdateManager {
         failed,
         errors,
         sourceLatencyMs,
+        sourceName,
         message: cancelled
           ? `更新已取消，已完成 ${updated} 个文件`
           : failed

@@ -1,7 +1,7 @@
 {
   "name": "tmp-file-mirror",
   "private": true,
-  "version": "1.3.8",
+  "version": "1.3.9",
   "description": "TMP File Mirror 客户端文件更新工具",
   "author": "BGYdook",
   "type": "module",
@@ -17,6 +17,7 @@
     "smoke:download": "node scripts/smoke-download.mjs",
     "smoke:ui": "node scripts/smoke-ui.mjs",
     "smoke:native": "node scripts/smoke-native.mjs",
+    "smoke:app-update": "node scripts/smoke-app-update.mjs",
     "smoke:desktop": "node scripts/smoke-desktop.mjs",
     "smoke:theme": "node scripts/smoke-theme.mjs",
     "smoke:dashboard": "node scripts/smoke-dashboard.mjs"

@@ -14,6 +14,7 @@ const {
   nativeImage,
 } = require("electron");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const fsp = require("node:fs/promises");
 const { TmpUpdateManager } = require(
   app.isPackaged ? "./tmp-update.release.cjs" : "./tmp-update.cjs",

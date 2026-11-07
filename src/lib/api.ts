@@ -44,7 +44,7 @@ export async function fetchTmpFiles(
 
 export async function selectFastestTmpBaseUrl(
   baseUrls: string[] = [DEFAULT_API_BASE, BACKUP_API_BASE],
-): Promise<{ baseUrl: string; latencyMs: number }> {
+): Promise<{ baseUrl: string; sourceName: string; latencyMs: number }> {
   const controllers = baseUrls.map(() => new AbortController());
   try {
     return await Promise.any(
@@ -54,6 +54,7 @@ export async function selectFastestTmpBaseUrl(
         if (!files.length) throw new Error("TMP 文件清单为空");
         return {
           baseUrl: normalizeBaseUrl(baseUrl),
+          sourceName: index === 0 ? "主源" : "备用源",
           latencyMs: Math.round(performance.now() - startedAt),
         };
       }),

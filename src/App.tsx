@@ -265,6 +265,7 @@ export default function App() {
   const [backupOpen, setBackupOpen] = useState(false);
   const [backups, setBackups] = useState<DesktopBackup[]>([]);
   const [networkDiagnostic, setNetworkDiagnostic] = useState<DesktopNetworkDiagnostic | null>(null);
+  const [sourceSelection, setSourceSelection] = useState("");
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -1143,6 +1144,7 @@ export default function App() {
       operationRef.current = true;
       setIsCancelling(false);
       setIsPaused(false);
+      setSourceSelection("正在测速主源和备用源…");
 
       if (window.tmpDesktop && nativeInstallPath) {
         setConfirmState(null);
@@ -1176,7 +1178,9 @@ export default function App() {
             forceRepair,
           });
           if (result.sourceLatencyMs !== undefined) {
-            addActivity(`更新源延迟：${result.sourceLatencyMs} ms`, "info");
+            const label = `已选择${result.sourceName || "更新源"} · 延迟 ${result.sourceLatencyMs} ms`;
+            setSourceSelection(label);
+            addActivity(label, "info");
           }
           for (const failure of result.errors) {
             addActivity(
@@ -1230,6 +1234,7 @@ export default function App() {
           showNotice(`更新失败：${(error as Error).message}`);
         } finally {
           setIsUpdating(false);
+          setSourceSelection((current) => current === "正在测速主源和备用源…" ? "未获取到测速结果" : current);
           setUpdateProgress(null);
           setIsCancelling(false);
           setIsPaused(false);
@@ -1266,8 +1271,11 @@ export default function App() {
       try {
         const selectedSource = await selectFastestTmpBaseUrl();
         updateBaseUrl = selectedSource.baseUrl;
-        addActivity(`更新源延迟：${selectedSource.latencyMs} ms`, "info");
+        const label = `已选择${selectedSource.sourceName} · 延迟 ${selectedSource.latencyMs} ms`;
+        setSourceSelection(label);
+        addActivity(label, "info");
       } catch (error) {
+        setSourceSelection("测速失败，使用主源");
         addActivity(`更新源测速失败：${(error as Error).message}`, "warning");
       }
 
@@ -1565,6 +1573,10 @@ export default function App() {
   useEffect(() => {
     if (!window.tmpDesktop) return;
     return window.tmpDesktop.onProgress((progress) => {
+      if (progress.phase === "source-selected") {
+        setSourceSelection(`已选择${progress.sourceName || "更新源"} · 延迟 ${progress.sourceLatencyMs} ms`);
+        return;
+      }
       setUpdateProgress({
         completed: progress.completed,
         total: progress.totalFiles,
@@ -2104,6 +2116,7 @@ export default function App() {
                 <div className="health-copy">
                   <strong>{healthTitle}</strong>
                   <span>{healthDescription}</span>
+                  {sourceSelection && <span aria-live="polite">{sourceSelection}</span>}
                 </div>
                 {!busy && hasScan && stats.needs > 0 && (
                   <button

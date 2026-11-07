@@ -63,6 +63,8 @@ const api = Object.freeze({
           etaSeconds: progress?.etaSeconds == null ? null : Number(progress.etaSeconds),
           phase: String(progress?.phase || "downloading"),
           message: String(progress?.message || ""),
+          sourceName: progress?.sourceName === "主源" || progress?.sourceName === "备用源" ? progress.sourceName : undefined,
+          sourceLatencyMs: Number.isFinite(progress?.sourceLatencyMs) ? progress.sourceLatencyMs : undefined,
         }),
       );
     };

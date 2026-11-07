@@ -29,7 +29,9 @@ declare global {
     overallPercent: number;
     speed: number;
     etaSeconds: number | null;
-    phase: "downloading" | "retrying" | "verifying" | "installing" | "done";
+    phase: "downloading" | "retrying" | "verifying" | "installing" | "done" | "source-selected";
+    sourceName?: string;
+    sourceLatencyMs?: number;
     message: string;
   }
 
@@ -41,6 +43,7 @@ declare global {
     errors: Array<{ filePath: string; message: string }>;
     message: string;
     sourceLatencyMs?: number;
+    sourceName?: string;
   }
 
   interface DesktopAppUpdateResult {

@@ -106,6 +106,11 @@ try {
   assert.equal(update.ok, true);
   assert.equal(update.updated, 2);
   assert.equal(Number.isFinite(update.sourceLatencyMs), true);
+  assert.equal(update.sourceName, "备用源");
+  const sourceEvent = progressEvents.find((event) => event.phase === "source-selected");
+  assert.equal(sourceEvent.sourceName, "备用源");
+  assert.equal(sourceEvent.sourceLatencyMs, update.sourceLatencyMs);
+  assert.equal(progressEvents.indexOf(sourceEvent) < progressEvents.findIndex((event) => event.phase === "downloading"), true);
   assert.equal(await fsp.readFile(path.join(installPath, "data", "outdated.bin"), "utf8"), "updated-data");
   assert.equal(await fsp.readFile(path.join(installPath, "nested", "missing.bin"), "utf8"), "missing-data");
   assert.throws(() => targetPath(installPath, "/data/../../outside"), /非法/);
