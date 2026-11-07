@@ -3,7 +3,6 @@ import {
   AlertCircle,
   ArrowRight,
   ArrowDownToLine,
-  BookOpen,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -36,7 +35,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { buildDownloadUrl, DEFAULT_API_BASE, DOCS_URL, fetchTmpFiles } from "./lib/api";
+import { BACKUP_API_BASE, buildDownloadUrl, DEFAULT_API_BASE, fetchTmpFiles, selectFastestTmpBaseUrl } from "./lib/api";
 import { downloadAndInstall } from "./lib/download";
 import {
   fileBaseName,
@@ -1172,9 +1171,13 @@ export default function App() {
           const result = await window.tmpDesktop.update({
             installPath: nativeInstallPath,
             baseUrl,
+            baseUrls: [DEFAULT_API_BASE, BACKUP_API_BASE],
             paths,
             forceRepair,
           });
+          if (result.sourceLatencyMs !== undefined) {
+            addActivity(`更新源延迟：${result.sourceLatencyMs} ms`, "info");
+          }
           for (const failure of result.errors) {
             addActivity(
               `${failure.filePath} 更新失败：${failure.message}`,
@@ -1259,6 +1262,15 @@ export default function App() {
       const failures = new Map<string, string>();
       let nextIndex = 0;
 
+      let updateBaseUrl = baseUrl;
+      try {
+        const selectedSource = await selectFastestTmpBaseUrl();
+        updateBaseUrl = selectedSource.baseUrl;
+        addActivity(`更新源延迟：${selectedSource.latencyMs} ms`, "info");
+      } catch (error) {
+        addActivity(`更新源测速失败：${(error as Error).message}`, "warning");
+      }
+
       const publishProgress = () => {
         const bytesDone = [...transferred.values()].reduce(
           (sum, value) => sum + value,
@@ -1297,7 +1309,12 @@ export default function App() {
           await downloadAndInstall(
             directory,
             target,
-            buildDownloadUrl(baseUrl, target),
+            buildDownloadUrl(updateBaseUrl, {
+              ...target,
+              downloadUrl: target.downloadUrl
+                ? new URL(target.downloadUrl, `${updateBaseUrl}/`).toString()
+                : "",
+            }),
             controller.signal,
             {
               onProgress: (done, _total, speed) => {
@@ -2823,11 +2840,6 @@ export default function App() {
                 <button type="button" onClick={() => void openRepository(CNB_REPO_URL)}>
                   <CloudDownload size={15} />
                   CNB 仓库
-                  <ExternalLink size={13} />
-                </button>
-                <button type="button" onClick={() => void openRepository(DOCS_URL)}>
-                  <BookOpen size={15} />
-                  API 文档
                   <ExternalLink size={13} />
                 </button>
                 {isDesktop && (

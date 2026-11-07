@@ -64,6 +64,34 @@ function normalizeManifest(payload) {
     .sort((a, b) => a.filePath.localeCompare(b.filePath));
 }
 
+async function selectFastestBaseUrl(baseUrls, fetcher) {
+  const candidates = [...new Set((baseUrls || []).map(normalizeBaseUrl))];
+  if (!candidates.length) throw new Error("没有可用的更新源");
+  const controller = new AbortController();
+  try {
+    return await Promise.any(candidates.map(async (base) => {
+      const startedAt = performance.now();
+      const requested = `${base}/api/tmp/files`;
+      const response = await fetcher(requested, {
+        headers: { Accept: "application/json", "User-Agent": "TMP-File-Mirror-Desktop" },
+        cache: "no-store",
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]),
+      });
+      if (!response.ok) throw new Error(`文件清单请求失败（HTTP ${response.status}）`);
+      const finalUrl = new URL(response.url || requested);
+      if (finalUrl.origin !== new URL(requested).origin) {
+        throw new Error("文件清单请求被重定向到非受信任地址");
+      }
+      if (!normalizeManifest(await response.json()).length) {
+        throw new Error("TMP 文件清单为空");
+      }
+      return { baseUrl: base, latencyMs: Math.round(performance.now() - startedAt) };
+    }));
+  } finally {
+    controller.abort();
+  }
+}
+
 function fileSegments(filePath) {
   const normalized = String(filePath || "").replaceAll("\\", "/");
   if (!normalized.startsWith("/") || normalized.includes("\0")) {
@@ -567,13 +595,19 @@ class TmpUpdateManager {
     if (backupEntry) await this.cleanupBackups(installPath).catch(() => undefined);
   }
 
-  async update({ installPath, baseUrl, paths, forceRepair = false }) {
+  async update({ installPath, baseUrl, baseUrls, paths, forceRepair = false }) {
     if (this.updating) throw new Error("TMP 更新正在进行中");
     this.updating = true;
     this.updateController = new AbortController();
     try {
       await ensureGamesClosed();
       const resolved = await this.validateInstallPath(installPath);
+      let sourceLatencyMs;
+      if (Array.isArray(baseUrls) && baseUrls.length) {
+        const selectedSource = await selectFastestBaseUrl(baseUrls, this.fetcher);
+        baseUrl = selectedSource.baseUrl;
+        sourceLatencyMs = selectedSource.latencyMs;
+      }
       const files = await this.fetchManifest(baseUrl, true);
       const selected = new Set(Array.isArray(paths) ? paths : []);
       if (!selected.size) throw new Error("没有选择需要更新的文件");
@@ -585,7 +619,7 @@ class TmpUpdateManager {
         ? ["current", "outdated", "missing", "error"].includes(file.state)
         : file.state === "outdated" || file.state === "missing");
       if (!targets.length) {
-        return { ok: true, updated: 0, failed: 0, errors: [], message: "没有需要更新的文件" };
+        return { ok: true, updated: 0, failed: 0, errors: [], message: "没有需要更新的文件", sourceLatencyMs };
       }
 
       const totalBytes = targets.reduce((sum, file) => sum + file.fileSize, 0);
@@ -685,6 +719,7 @@ class TmpUpdateManager {
         updated,
         failed,
         errors,
+        sourceLatencyMs,
         message: cancelled
           ? `更新已取消，已完成 ${updated} 个文件`
           : failed
@@ -710,5 +745,6 @@ module.exports = {
   fileSegments,
   normalizeManifest,
   resolveDownloadUrl,
+  selectFastestBaseUrl,
   targetPath,
 };

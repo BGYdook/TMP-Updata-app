@@ -1,8 +1,7 @@
 import type { TmpApiResponse, TmpFile } from "../types";
 
 export const DEFAULT_API_BASE = "https://tmplistoss.bgydook.cn";
-export const DOCS_URL = `${DEFAULT_API_BASE}/docs/`;
-
+export const BACKUP_API_BASE = "https://tmplistoss.lvyevtc.cn";
 export function normalizeBaseUrl(value: string): string {
   return value.trim().replace(/\/+$/, "");
 }
@@ -41,6 +40,27 @@ export async function fetchTmpFiles(
   }
 
   return deduplicateFiles(payload.data);
+}
+
+export async function selectFastestTmpBaseUrl(
+  baseUrls: string[] = [DEFAULT_API_BASE, BACKUP_API_BASE],
+): Promise<{ baseUrl: string; latencyMs: number }> {
+  const controllers = baseUrls.map(() => new AbortController());
+  try {
+    return await Promise.any(
+      baseUrls.map(async (baseUrl, index) => {
+        const startedAt = performance.now();
+        const files = await fetchTmpFiles(baseUrl, controllers[index].signal);
+        if (!files.length) throw new Error("TMP 文件清单为空");
+        return {
+          baseUrl: normalizeBaseUrl(baseUrl),
+          latencyMs: Math.round(performance.now() - startedAt),
+        };
+      }),
+    );
+  } finally {
+    controllers.forEach((controller) => controller.abort());
+  }
 }
 
 function deduplicateFiles(files: TmpFile[]): TmpFile[] {

@@ -40,6 +40,7 @@ declare global {
     failed: number;
     errors: Array<{ filePath: string; message: string }>;
     message: string;
+    sourceLatencyMs?: number;
   }
 
   interface DesktopAppUpdateResult {
@@ -90,6 +91,7 @@ declare global {
     update(options: {
       installPath: string;
       baseUrl: string;
+      baseUrls?: string[];
       paths: string[];
       forceRepair?: boolean;
     }): Promise<DesktopUpdateResult>;

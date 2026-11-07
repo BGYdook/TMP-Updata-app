@@ -21,6 +21,7 @@ const { TmpUpdateManager } = require(
 
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || "http://127.0.0.1:5173";
 const TMP_API_BASE = "https://tmplistoss.bgydook.cn";
+const TMP_API_BACKUP_BASE = "https://tmplistoss.lvyevtc.cn";
 const CNB_REPO_SLUG = "BGYdook/TMP-Updata-app";
 const CNB_RELEASES_URL = `https://cnb.cool/${CNB_REPO_SLUG}/-/releases/latest`;
 const CNB_RELEASE_ORIGIN = "https://cnb.cool";
@@ -411,6 +412,7 @@ ipcMain.handle("tmp:update", async (event, options) => {
     const result = await getTmpUpdate().update({
       installPath,
       baseUrl: TMP_API_BASE,
+      baseUrls: [TMP_API_BASE, TMP_API_BACKUP_BASE],
       paths: [...new Set(options.paths)],
       forceRepair: options.forceRepair === true,
     });
